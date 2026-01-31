@@ -1,0 +1,178 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jenkins-casc
+  namespace: kong-system
+data:
+  jenkins.yaml: |
+    jenkins:
+      securityRealm:
+        local:
+          allowsSignup: false
+          users:
+            - id: "admin"
+              password: "admin"
+      authorizationStrategy:
+        loggedInUsersCanDoAnything:
+          allowAnonymousRead: false
+      globalNodeProperties:
+        - envVars:
+            env:
+              - key: KONG_ADMIN_URL
+                value: http://kong-admin.kong-system.svc.cluster.local:8001
+              - key: KEYCLOAK_URL
+                value: http://keycloak.kong-system.svc.cluster.local:8080
+    unclassified:
+      location:
+        url: http://localhost:8081/
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jenkins-plugins
+  namespace: kong-system
+data:
+  plugins.txt: |
+    workflow-aggregator
+    git
+    github
+    docker-workflow
+    kubernetes
+    configuration-as-code
+    job-dsl
+    blueocean
+    pipeline-graph-view
+    pipeline-stage-view
+    build-monitor-plugin
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-home
+  namespace: kong-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jenkins
+  namespace: kong-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jenkins
+  template:
+    metadata:
+      labels:
+        app: jenkins
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+      - name: install-plugins
+        image: jenkins/jenkins:lts-jdk21
+        command:
+        - sh
+        - -c
+        - |
+          if [ ! -f /var/jenkins_home/.plugins-installed ]; then
+            echo "Installing plugins..."
+            jenkins-plugin-cli --plugin-file /plugins/plugins.txt --plugin-download-directory /var/jenkins_home/plugins
+            touch /var/jenkins_home/.plugins-installed
+          else
+            echo "Plugins already installed, skipping..."
+          fi
+        volumeMounts:
+        - name: jenkins-home
+          mountPath: /var/jenkins_home
+        - name: jenkins-plugins
+          mountPath: /plugins
+      - name: install-deck
+        image: alpine:latest
+        command:
+        - sh
+        - -c
+        - |
+          if [ ! -f /tools/deck ]; then
+            apk add --no-cache curl tar
+            DECK_VERSION=$(curl -s https://api.github.com/repos/Kong/deck/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+            echo "Installing decK version: $DECK_VERSION"
+            curl -sL "https://github.com/Kong/deck/releases/download/v${DECK_VERSION}/deck_${DECK_VERSION}_linux_amd64.tar.gz" -o /tmp/deck.tar.gz
+            tar -xzf /tmp/deck.tar.gz -C /tools
+            chmod +x /tools/deck
+          else
+            echo "decK already installed, skipping..."
+          fi
+          /tools/deck version
+        volumeMounts:
+        - name: tools
+          mountPath: /tools
+      containers:
+      - name: jenkins
+        image: jenkins/jenkins:lts-jdk21
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 50000
+          name: agent
+        env:
+        - name: JAVA_OPTS
+          value: "-Djenkins.install.runSetupWizard=false"
+        - name: CASC_JENKINS_CONFIG
+          value: "/var/jenkins_home/casc_configs"
+        - name: PATH
+          value: "/opt/tools:/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        volumeMounts:
+        - name: jenkins-home
+          mountPath: /var/jenkins_home
+        - name: jenkins-casc
+          mountPath: /var/jenkins_home/casc_configs
+        - name: tools
+          mountPath: /opt/tools
+        readinessProbe:
+          httpGet:
+            path: /login
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /login
+            port: 8080
+          initialDelaySeconds: 90
+          periodSeconds: 30
+      volumes:
+      - name: jenkins-home
+        persistentVolumeClaim:
+          claimName: jenkins-home
+      - name: jenkins-casc
+        configMap:
+          name: jenkins-casc
+      - name: jenkins-plugins
+        configMap:
+          name: jenkins-plugins
+      - name: tools
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins
+  namespace: kong-system
+spec:
+  selector:
+    app: jenkins
+  ports:
+  - port: 8081
+    targetPort: 8080
+    name: http
+  - port: 50000
+    targetPort: 50000
+    name: agent
+  type: ClusterIP
