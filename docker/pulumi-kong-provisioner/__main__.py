@@ -30,13 +30,12 @@ def sanitize_resource_name(name: str) -> str:
 
 def generate_prefix_strip_lua(prefix: str) -> str:
     """Generate Lua code for pre-function plugin to strip prefix from path."""
-    # Escape special Lua pattern characters in prefix
-    escaped_prefix = prefix.replace("-", "%%-").replace(".", "%%.")
+    prefix_len = len(prefix)
     return f"""
 local prefix = "{prefix}"
 local path = kong.request.get_path()
-if path:sub(1, #{len(prefix)}) == prefix then
-  local new_path = path:sub({len(prefix) + 1})
+if path:sub(1, {prefix_len}) == prefix then
+  local new_path = path:sub({prefix_len + 1})
   if new_path == "" then new_path = "/" end
   kong.service.request.set_path(new_path)
 end
