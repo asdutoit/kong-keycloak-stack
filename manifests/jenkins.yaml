@@ -44,6 +44,8 @@ data:
     pipeline-graph-view
     pipeline-stage-view
     build-monitor-plugin
+    http-request
+    ws-cleanup
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -99,20 +101,20 @@ spec:
         - sh
         - -c
         - |
-          if [ ! -f /tools/deck ]; then
+          if [ ! -f /opt/tools/deck ]; then
             apk add --no-cache curl tar
             DECK_VERSION=$(curl -s https://api.github.com/repos/Kong/deck/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
             echo "Installing decK version: $DECK_VERSION"
             curl -sL "https://github.com/Kong/deck/releases/download/v${DECK_VERSION}/deck_${DECK_VERSION}_linux_amd64.tar.gz" -o /tmp/deck.tar.gz
-            tar -xzf /tmp/deck.tar.gz -C /tools
-            chmod +x /tools/deck
+            tar -xzf /tmp/deck.tar.gz -C /opt/tools
+            chmod +x /opt/tools/deck
           else
             echo "decK already installed, skipping..."
           fi
-          /tools/deck version
+          /opt/tools/deck version
         volumeMounts:
         - name: tools
-          mountPath: /tools
+          mountPath: /opt/tools
       containers:
       - name: jenkins
         image: jenkins/jenkins:lts-jdk21
@@ -135,6 +137,8 @@ spec:
           mountPath: /var/jenkins_home/casc_configs
         - name: tools
           mountPath: /opt/tools
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
         readinessProbe:
           httpGet:
             path: /login
@@ -159,6 +163,10 @@ spec:
           name: jenkins-plugins
       - name: tools
         emptyDir: {}
+      - name: docker-sock
+        hostPath:
+          path: /var/run/docker.sock
+          type: Socket
 ---
 apiVersion: v1
 kind: Service
