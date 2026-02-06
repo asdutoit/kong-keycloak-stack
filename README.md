@@ -94,8 +94,8 @@ Jenkins is configured with security enabled via Configuration as Code (JCasC).
 ### Creating an API Token
 
 1. Log in to Jenkins at http://localhost:8081
-2. Click your username (top right) → **Configure**
-3. Scroll to **API Token** section
+2. Click your username (top right) → **Security**
+3. Scroll to **Security** section
 4. Click **Add new Token** → give it a name → **Generate**
 5. Copy the token (it won't be shown again)
 
