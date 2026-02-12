@@ -18,6 +18,11 @@ if ! curl -s "$KONG_ADMIN/status" > /dev/null 2>&1; then
   exit 1
 fi
 
+echo "Enabling Prometheus plugin globally..."
+curl -s -X POST $KONG_ADMIN/plugins \
+  --data "name=prometheus" | jq .
+
+echo ""
 echo "Adding httpbin service to Kong..."
 
 # 1. Create Service
@@ -57,6 +62,13 @@ echo "  curl -H 'apikey: my-api-key-123' http://localhost:8000/api/httpbin/get"
 echo ""
 echo "Without API key (should return 401):"
 echo "  curl http://localhost:8000/api/httpbin/get"
+echo ""
+echo "Kong Metrics (Prometheus format):"
+echo "  curl http://localhost:8001/metrics"
+echo ""
+echo "Monitoring:"
+echo "  Prometheus: http://localhost:9090"
+echo "  Grafana:    http://localhost:3001 (admin/admin)"
 
 echo -e "\n\n=== JWT Authentication (Alternative) ==="
 echo "To switch from API Key to JWT authentication:"
