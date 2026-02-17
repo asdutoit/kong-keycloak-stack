@@ -1,3 +1,4 @@
 pulumi>=3.0.0
 pulumi-kong>=4.0.0
+pulumiverse-grafana>=0.7.0
 pydantic>=2.0.0
