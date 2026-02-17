@@ -59,9 +59,13 @@ info = spec.get("info", {})
 api_title = info.get("title", "unnamed-api")
 api_version = info.get("version", "1.0.0")
 
-# Sanitize names
-api_name = sanitize_name(api_title)
-resource_name = sanitize_resource_name(api_title)
+# Environment suffix: -dev, -test, -acc, none for prod
+environment = os.environ.get("ENVIRONMENT", "dev")
+env_suffix = "" if environment in ("prod", "production") else f"-{environment}"
+
+# Sanitize names (with environment suffix for non-prod)
+api_name = sanitize_name(api_title) + env_suffix
+resource_name = sanitize_resource_name(api_title) + env_suffix
 
 # Get service configuration
 service_defaults = spec.get("x-kong-service-defaults", {})
@@ -99,7 +103,11 @@ service = kong.Service(
 
 # Get route prefix configuration
 route_prefix_config = spec.get("x-kong-route-prefix", {})
+# Default prefix uses resource_name which already has env suffix
 route_prefix = route_prefix_config.get("prefix", f"/{resource_name}").rstrip("/")
+# If a custom prefix is set, append env suffix to it too
+if route_prefix_config.get("prefix") and env_suffix:
+    route_prefix = route_prefix + env_suffix
 strip_prefix = route_prefix_config.get("stripPrefix", True)
 
 # For per-endpoint routes with prefix stripping, we use pre-function plugin
@@ -208,6 +216,8 @@ for path, path_item in paths.items():
 # Exports
 pulumi.export("api_name", api_name)
 pulumi.export("api_version", api_version)
+pulumi.export("environment", environment)
+pulumi.export("env_suffix", env_suffix)
 pulumi.export("service_id", service.id)
 pulumi.export("route_prefix", route_prefix)
 pulumi.export("routes_created", routes_created)
@@ -223,9 +233,9 @@ grafana_url = os.environ.get("GRAFANA_URL")
 grafana_api_key = os.environ.get("GRAFANA_API_KEY")
 dashboard_enabled = os.environ.get("GRAFANA_DASHBOARD_ENABLED", "false") == "true"
 
-# Platform/environment from env (set by Jenkinsfile from deploy.yaml)
+# Platform from env (set by Jenkinsfile from deploy.yaml)
+# Note: environment is already read at the top for env_suffix
 platform = os.environ.get("PLATFORM", "local")
-environment = os.environ.get("ENVIRONMENT", "dev")
 
 
 def build_dashboard(service_name: str, plat: str, env: str) -> dict:

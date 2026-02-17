@@ -1,0 +1,372 @@
+// Jenkins Pipeline for Kong Gateway provisioning via decK
+// Job name: kong-api-deploy (or kong-deck-deploy)
+//
+// Supports two trigger modes:
+//   1. Parameter-driven (direct deploy from UI for local/legacy)
+//   2. Git-triggered (webhook from api-specs repo for shared environments)
+
+pipeline {
+    agent any
+
+    parameters {
+        // Existing parameters (for direct/local deploy)
+        string(name: 'SPEC_ID', defaultValue: '', description: 'Database spec ID')
+        string(name: 'SPEC_NAME', defaultValue: '', description: 'Service name/tag')
+        text(name: 'SPEC_CONTENT', defaultValue: '', description: 'Base64-encoded OpenAPI spec')
+        string(name: 'ACTION', defaultValue: 'deploy', description: 'Action: deploy or deprovision')
+        string(name: 'ENVIRONMENT', defaultValue: 'development', description: 'Deployment environment')
+        string(name: 'ROUTE_PREFIX', defaultValue: '', description: 'Path prefix for deck namespace')
+        string(name: 'CALLBACK_URL', defaultValue: '', description: 'Callback URL for status updates')
+        string(name: 'KONG_ADMIN_URL', defaultValue: '', description: 'Kong Admin URL')
+        string(name: 'PLATFORM', defaultValue: '', description: 'Platform slug')
+    }
+
+    environment {
+        KONG_ADMIN_URL = "${params.KONG_ADMIN_URL ?: 'http://kong-admin:8001'}"
+        APP_CALLBACK_BASE = "${env.APP_URL ?: 'http://tapir-flow:3000'}"
+    }
+
+    stages {
+        // ─── Determine trigger mode ───
+        stage('Determine Trigger') {
+            steps {
+                script {
+                    // If GIT_REF is set, this was triggered by a git webhook
+                    if (env.GIT_REF) {
+                        env.TRIGGER_MODE = 'git'
+                        echo "Triggered by git webhook: ${env.GIT_REF}"
+
+                        // Parse git ref to determine target environment
+                        if (env.GIT_REF ==~ /refs\/tags\/v\d+\.\d+\.\d+-rc\.\d+/) {
+                            env.TARGET_ENVS = 'acceptance'
+                            env.REQUIRES_APPROVAL = 'true'
+                            env.GIT_TAG = env.GIT_REF.replaceAll('refs/tags/', '')
+                        } else if (env.GIT_REF ==~ /refs\/tags\/v\d+\.\d+\.\d+$/) {
+                            env.TARGET_ENVS = 'production'
+                            env.REQUIRES_APPROVAL = 'true'
+                            env.GIT_TAG = env.GIT_REF.replaceAll('refs/tags/', '')
+                        } else if (env.GIT_REF == 'refs/heads/main') {
+                            env.TARGET_ENVS = 'dev,test'
+                            env.REQUIRES_APPROVAL = 'false'
+                        } else {
+                            echo "Ignoring ref: ${env.GIT_REF}"
+                            env.TARGET_ENVS = ''
+                        }
+                    } else {
+                        env.TRIGGER_MODE = 'direct'
+                        env.TARGET_ENVS = params.ENVIRONMENT
+                        env.REQUIRES_APPROVAL = 'false'
+                        echo "Triggered by direct API call (local/legacy deploy)"
+                    }
+
+                    echo "Trigger mode: ${env.TRIGGER_MODE}"
+                    echo "Target environments: ${env.TARGET_ENVS}"
+                    echo "Requires approval: ${env.REQUIRES_APPROVAL}"
+                }
+            }
+        }
+
+        // ─── Git mode: checkout and detect changed services ───
+        stage('Read Spec from Git') {
+            when {
+                expression { env.TRIGGER_MODE == 'git' && env.TARGET_ENVS }
+            }
+            steps {
+                script {
+                    // Checkout the api-specs repo
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: env.GIT_TAG ?: 'main']],
+                        userRemoteConfigs: [[
+                            url: env.GIT_REPO_URL ?: "https://github.com/${env.GIT_REPO}",
+                            credentialsId: 'git-api-specs'
+                        ]]
+                    ])
+
+                    // Detect which services changed (from commit data or diff)
+                    def changedServices = []
+
+                    if (env.GIT_TAG) {
+                        // For tags: deploy all services that have a deploy.yaml with method=deck
+                        def dirs = sh(script: "ls -d */deploy.yaml 2>/dev/null | sed 's|/deploy.yaml||' || echo ''", returnStdout: true).trim()
+                        changedServices = dirs ? dirs.split('\n').toList() : []
+                    } else {
+                        // For pushes: detect changed directories from commit data
+                        def allChanged = sh(script: "git diff --name-only HEAD~1 HEAD 2>/dev/null || echo ''", returnStdout: true).trim()
+                        if (allChanged) {
+                            changedServices = allChanged.split('\n')
+                                .collect { it.split('/')[0] }
+                                .unique()
+                                .findAll { it && !it.startsWith('.') && it != 'templates' && it != 'README.md' }
+                        }
+                    }
+
+                    // Filter to services that use deck method
+                    env.CHANGED_SERVICES = changedServices.findAll { svc ->
+                        def deployYaml = readFile(file: "${svc}/deploy.yaml").trim()
+                        return deployYaml.contains('method: deck')
+                    }.join(',')
+
+                    echo "Changed services (deck): ${env.CHANGED_SERVICES}"
+                }
+            }
+        }
+
+        // ─── Approval gate (ACC/PROD) ───
+        stage('Approval Gate') {
+            when {
+                expression { env.REQUIRES_APPROVAL == 'true' }
+            }
+            steps {
+                input message: "Deploy to ${env.TARGET_ENVS}?",
+                      submitter: 'api-governance,release-managers'
+            }
+        }
+
+        // ─── Git mode: deploy each changed service ───
+        stage('Deploy from Git') {
+            when {
+                expression { env.TRIGGER_MODE == 'git' && env.CHANGED_SERVICES }
+            }
+            steps {
+                script {
+                    def services = env.CHANGED_SERVICES.split(',')
+                    def targetEnvs = env.TARGET_ENVS.split(',')
+
+                    for (svc in services) {
+                        echo "=== Deploying ${svc} ==="
+
+                        // Read deploy.yaml for this service
+                        def deployConfig = readYaml(file: "${svc}/deploy.yaml")
+                        def platform = deployConfig.platform
+                        def routePrefix = deployConfig.route_prefix ?: ''
+
+                        // Read the openapi spec
+                        def specFile = "${svc}/openapi.yaml"
+
+                        // Inject Prometheus plugin
+                        sh """
+                            # Inject prometheus plugin if not present
+                            if ! grep -q 'x-kong-plugin-prometheus' ${specFile}; then
+                                echo '' >> ${specFile}
+                                echo 'x-kong-plugin-prometheus:' >> ${specFile}
+                                echo '  enabled: true' >> ${specFile}
+                                echo '  config: {}' >> ${specFile}
+                            fi
+                        """
+
+                        // Convert to Kong config
+                        sh "deck file openapi2kong --spec ${specFile} -o kong-${svc}.yaml"
+
+                        sh "echo '=== Generated Kong config for ${svc} ===' && cat kong-${svc}.yaml"
+
+                        // Apply route prefix
+                        if (routePrefix) {
+                            sh "deck file namespace --path-prefix=${routePrefix} --state=kong-${svc}.yaml --output-file=kong-${svc}.yaml"
+                        }
+
+                        // Deploy to each target environment
+                        for (targetEnv in targetEnvs) {
+                            targetEnv = targetEnv.trim()
+                            echo "Deploying ${svc} to ${platform}/${targetEnv}"
+
+                            // Resolve Kong Admin URL for this platform/environment
+                            // This could come from Jenkins credentials or a lookup
+                            def kongUrl = env."KONG_ADMIN_URL_${platform.toUpperCase()}_${targetEnv.toUpperCase()}" ?: env.KONG_ADMIN_URL
+
+                            sh "deck gateway sync kong-${svc}.yaml --kong-addr ${kongUrl} --select-tag \"${svc}\""
+
+                            echo "Deployed ${svc} to ${platform}/${targetEnv}"
+                        }
+
+                        // Provision monitoring via Tapir Flow API
+                        if (env.APP_CALLBACK_BASE && deployConfig.monitoring?.grafana) {
+                            def specId = deployConfig.spec_id ?: params.SPEC_ID ?: ''
+                            if (specId) {
+                                for (targetEnv in targetEnvs) {
+                                    targetEnv = targetEnv.trim()
+                                    def alertsPayload = null
+                                    if (deployConfig.monitoring?.alerts) {
+                                        def threshold = deployConfig.monitoring.alerts.error_rate_threshold ?: '5%'
+                                        threshold = threshold.toString().replace('%', '')
+                                        alertsPayload = [
+                                            error_rate_threshold: threshold as int,
+                                            p99_latency_ms: deployConfig.monitoring.alerts.p99_latency_ms ?: 500,
+                                            notify: deployConfig.monitoring.alerts.notify ?: null
+                                        ]
+                                    }
+                                    def payload = groovy.json.JsonOutput.toJson([
+                                        serviceName: svc,
+                                        platform: platform,
+                                        environment: targetEnv,
+                                        routePrefix: routePrefix,
+                                        alerts: alertsPayload
+                                    ])
+                                    sh """
+                                        curl -s -X POST -H 'Content-Type: application/json' \
+                                            -d '${payload}' \
+                                            '${env.APP_CALLBACK_BASE}/api/specs/${specId}/provision-monitoring' \
+                                            || echo 'Monitoring provisioning failed (non-fatal)'
+                                    """
+                                }
+                            }
+                        }
+                    }
+
+                    // Callback to Tapir Flow UI
+                    if (env.APP_CALLBACK_BASE) {
+                        def payload = groovy.json.JsonOutput.toJson([
+                            status: 'SUCCESS',
+                            buildNumber: env.BUILD_NUMBER,
+                            services: env.CHANGED_SERVICES,
+                            environments: env.TARGET_ENVS,
+                            gitRef: env.GIT_REF,
+                            gitTag: env.GIT_TAG ?: null
+                        ])
+                        sh """
+                            curl -s -X POST -H 'Content-Type: application/json' \
+                                -d '${payload}' \
+                                '${env.APP_CALLBACK_BASE}/api/git/webhook' || echo 'Callback failed (non-fatal)'
+                        """
+                    }
+                }
+            }
+        }
+
+        // ─── Direct mode: existing parameter-based flow ───
+        stage('Decode Spec') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' && params.ACTION == 'deploy' }
+            }
+            steps {
+                sh '''
+                    echo "${SPEC_CONTENT}" | base64 -d > openapi.yaml
+                    echo "Decoded spec:"
+                    head -20 openapi.yaml
+                '''
+            }
+        }
+
+        stage('Convert to Kong Config') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' && params.ACTION == 'deploy' }
+            }
+            steps {
+                script {
+                    sh 'deck file openapi2kong --spec openapi.yaml -o kong.yaml'
+
+                    sh 'echo "=== Generated Kong config ===" && cat kong.yaml'
+                }
+            }
+        }
+
+        stage('Apply Route Prefix') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' && params.ACTION == 'deploy' && params.ROUTE_PREFIX?.trim() }
+            }
+            steps {
+                sh "deck file namespace --path-prefix=${params.ROUTE_PREFIX} --state=kong.yaml --output-file=kong.yaml"
+            }
+        }
+
+        stage('Sync to Kong') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' && params.ACTION == 'deploy' }
+            }
+            steps {
+                sh "deck gateway sync kong.yaml --kong-addr ${KONG_ADMIN_URL} --select-tag \"${params.SPEC_NAME}\""
+            }
+        }
+
+        stage('Provision Monitoring') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' && params.ACTION == 'deploy' && params.CALLBACK_URL?.trim() }
+            }
+            steps {
+                script {
+                    // Extract spec ID from callback URL: .../api/specs/{specId}/deploy/callback?...
+                    def callbackUrl = params.CALLBACK_URL
+                    def matcher = callbackUrl =~ /\/api\/specs\/([^\/]+)\/deploy/
+                    def specId = matcher ? matcher[0][1] : ''
+
+                    if (specId) {
+                        def appBase = callbackUrl.replaceAll(/\/api\/specs\/.*/, '')
+                        def payload = groovy.json.JsonOutput.toJson([
+                            serviceName: params.SPEC_NAME,
+                            platform: params.PLATFORM ?: 'local',
+                            environment: params.ENVIRONMENT ?: 'dev',
+                            routePrefix: params.ROUTE_PREFIX ?: "/${params.SPEC_NAME}"
+                        ])
+                        sh """
+                            curl -s -X POST -H 'Content-Type: application/json' \
+                                -d '${payload}' \
+                                '${appBase}/api/specs/${specId}/provision-monitoring' \
+                                || echo 'Monitoring provisioning failed (non-fatal)'
+                        """
+                    } else {
+                        echo 'Could not extract spec ID from callback URL, skipping monitoring'
+                    }
+                }
+            }
+        }
+
+        stage('Deprovision') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' && params.ACTION == 'deprovision' }
+            }
+            steps {
+                writeFile file: 'empty-kong.yaml', text: '_format_version: "3.0"\nservices: []'
+                sh "deck gateway sync empty-kong.yaml --kong-addr ${KONG_ADMIN_URL} --select-tag \"${params.SPEC_NAME}\""
+            }
+        }
+
+        stage('Callback') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' && params.CALLBACK_URL?.trim() }
+            }
+            steps {
+                script {
+                    def status = currentBuild.result ?: 'SUCCESS'
+                    def payload = groovy.json.JsonOutput.toJson([
+                        status: status,
+                        buildNumber: env.BUILD_NUMBER,
+                        specName: params.SPEC_NAME,
+                        errorMessage: status == 'FAILURE' ? 'Deployment failed' : null
+                    ])
+                    sh """
+                        curl -s -X POST -H 'Content-Type: application/json' \
+                            -d '${payload}' \
+                            '${params.CALLBACK_URL}' || echo 'Callback failed but continuing'
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployment successful (mode: ${env.TRIGGER_MODE})"
+        }
+        failure {
+            echo "Deployment failed (mode: ${env.TRIGGER_MODE})"
+            script {
+                // Direct mode failure callback
+                if (env.TRIGGER_MODE == 'direct' && params.CALLBACK_URL?.trim()) {
+                    def payload = groovy.json.JsonOutput.toJson([
+                        status: 'FAILURE',
+                        buildNumber: env.BUILD_NUMBER,
+                        errorMessage: 'Deployment failed - check Jenkins logs'
+                    ])
+                    sh """
+                        curl -s -X POST -H 'Content-Type: application/json' \
+                            -d '${payload}' \
+                            '${params.CALLBACK_URL}' || echo 'Callback failed'
+                    """
+                }
+            }
+        }
+        always {
+            deleteDir()
+        }
+    }
+}

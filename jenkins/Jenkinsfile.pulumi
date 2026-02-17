@@ -1,0 +1,501 @@
+// Jenkins Pipeline for Kong Gateway provisioning via Pulumi
+// Job name: kong-pulumi-deploy
+//
+// Supports two trigger modes:
+//   1. Parameter-driven (direct deploy from UI for local/legacy)
+//   2. Git-triggered (webhook from api-specs repo for shared environments)
+//
+// Uses Kubernetes Jobs to run the pulumi-kong-provisioner container.
+
+pipeline {
+    agent any
+
+    parameters {
+        // Existing parameters (for direct/local deploy)
+        string(name: 'SPEC_ID', defaultValue: '', description: 'Spec ID from database')
+        string(name: 'SPEC_NAME', defaultValue: '', description: 'Sanitized API name (used as stack name)')
+        string(name: 'ENVIRONMENT', defaultValue: 'development', description: 'Deployment environment')
+        text(name: 'SPEC_CONTENT', defaultValue: '', description: 'Base64-encoded OpenAPI spec JSON')
+        string(name: 'ROUTE_PREFIX', defaultValue: '', description: 'Route prefix')
+        string(name: 'CALLBACK_URL', defaultValue: '', description: 'Callback URL for status updates')
+        string(name: 'ACTION', defaultValue: 'deploy', description: 'Action: deploy or destroy')
+        string(name: 'KONG_ADMIN_URL', defaultValue: '', description: 'Kong Admin URL')
+        string(name: 'PLATFORM', defaultValue: '', description: 'Platform slug')
+    }
+
+    environment {
+        KONG_ADMIN_URL = "${params.KONG_ADMIN_URL ?: 'http://kong-admin.kong-system.svc.cluster.local:8001'}"
+        PROVISIONER_IMAGE = 'asdutoit/pulumi-kong-provisioner:latest'
+        K8S_NAMESPACE = 'kong-system'
+        APP_CALLBACK_BASE = "${env.APP_URL ?: 'http://tapir-flow:3000'}"
+    }
+
+    stages {
+        // ─── Determine trigger mode ───
+        stage('Determine Trigger') {
+            steps {
+                script {
+                    if (env.GIT_REF) {
+                        env.TRIGGER_MODE = 'git'
+                        echo "Triggered by git webhook: ${env.GIT_REF}"
+
+                        if (env.GIT_REF ==~ /refs\/tags\/v\d+\.\d+\.\d+-rc\.\d+/) {
+                            env.TARGET_ENVS = 'acceptance'
+                            env.REQUIRES_APPROVAL = 'true'
+                            env.GIT_TAG = env.GIT_REF.replaceAll('refs/tags/', '')
+                        } else if (env.GIT_REF ==~ /refs\/tags\/v\d+\.\d+\.\d+$/) {
+                            env.TARGET_ENVS = 'production'
+                            env.REQUIRES_APPROVAL = 'true'
+                            env.GIT_TAG = env.GIT_REF.replaceAll('refs/tags/', '')
+                        } else if (env.GIT_REF == 'refs/heads/main') {
+                            env.TARGET_ENVS = 'dev,test'
+                            env.REQUIRES_APPROVAL = 'false'
+                        } else {
+                            env.TARGET_ENVS = ''
+                        }
+                    } else {
+                        env.TRIGGER_MODE = 'direct'
+                        env.TARGET_ENVS = params.ENVIRONMENT
+                        env.REQUIRES_APPROVAL = 'false'
+                        echo "Triggered by direct API call (local/legacy deploy)"
+                    }
+
+                    echo "Trigger mode: ${env.TRIGGER_MODE}"
+                    echo "Target environments: ${env.TARGET_ENVS}"
+                }
+            }
+        }
+
+        // ─── Git mode: checkout and detect changed services ───
+        stage('Read Spec from Git') {
+            when {
+                expression { env.TRIGGER_MODE == 'git' && env.TARGET_ENVS }
+            }
+            steps {
+                script {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: env.GIT_TAG ?: 'main']],
+                        userRemoteConfigs: [[
+                            url: env.GIT_REPO_URL ?: "https://github.com/${env.GIT_REPO}",
+                            credentialsId: 'git-api-specs'
+                        ]]
+                    ])
+
+                    def changedServices = []
+
+                    if (env.GIT_TAG) {
+                        def dirs = sh(script: "ls -d */deploy.yaml 2>/dev/null | sed 's|/deploy.yaml||' || echo ''", returnStdout: true).trim()
+                        changedServices = dirs ? dirs.split('\n').toList() : []
+                    } else {
+                        def allChanged = sh(script: "git diff --name-only HEAD~1 HEAD 2>/dev/null || echo ''", returnStdout: true).trim()
+                        if (allChanged) {
+                            changedServices = allChanged.split('\n')
+                                .collect { it.split('/')[0] }
+                                .unique()
+                                .findAll { it && !it.startsWith('.') && it != 'templates' && it != 'README.md' }
+                        }
+                    }
+
+                    // Filter to services that use pulumi method
+                    env.CHANGED_SERVICES = changedServices.findAll { svc ->
+                        def deployYaml = readFile(file: "${svc}/deploy.yaml").trim()
+                        return deployYaml.contains('method: pulumi')
+                    }.join(',')
+
+                    echo "Changed services (pulumi): ${env.CHANGED_SERVICES}"
+                }
+            }
+        }
+
+        // ─── Approval gate (ACC/PROD) ───
+        stage('Approval Gate') {
+            when {
+                expression { env.REQUIRES_APPROVAL == 'true' }
+            }
+            steps {
+                input message: "Deploy to ${env.TARGET_ENVS}?",
+                      submitter: 'api-governance,release-managers'
+            }
+        }
+
+        // ─── Git mode: deploy each changed service via K8s Job ───
+        stage('Deploy from Git') {
+            when {
+                expression { env.TRIGGER_MODE == 'git' && env.CHANGED_SERVICES }
+            }
+            steps {
+                script {
+                    def services = env.CHANGED_SERVICES.split(',')
+                    def targetEnvs = env.TARGET_ENVS.split(',')
+
+                    for (svc in services) {
+                        echo "=== Deploying ${svc} via Pulumi ==="
+
+                        def deployConfig = readYaml(file: "${svc}/deploy.yaml")
+                        def platform = deployConfig.platform
+
+                        // Read monitoring config for Grafana provisioning via Pulumi
+                        def monitoringEnabled = deployConfig.monitoring?.grafana ? 'true' : 'false'
+                        def errorRateThreshold = deployConfig.monitoring?.alerts?.error_rate_threshold?.toString()?.replace('%','') ?: ''
+                        def p99LatencyMs = deployConfig.monitoring?.alerts?.p99_latency_ms?.toString() ?: ''
+                        def notifyChannel = deployConfig.monitoring?.alerts?.notify ?: ''
+                        def grafanaUrl = env.GRAFANA_URL ?: 'http://grafana.kong-system.svc.cluster.local:3001'
+
+                        // Read and inject Prometheus plugin
+                        def specContent = readFile(file: "${svc}/openapi.yaml")
+                        if (!specContent.contains('x-kong-plugin-prometheus')) {
+                            specContent += '\nx-kong-plugin-prometheus:\n  enabled: true\n  config: {}\n'
+                        }
+
+                        for (targetEnv in targetEnvs) {
+                            targetEnv = targetEnv.trim()
+                            def stackName = "${platform}-${targetEnv}-${svc}"
+                            def jobName = "pulumi-${stackName}-${env.BUILD_NUMBER}".toLowerCase().replaceAll('[^a-z0-9-]', '-').take(63)
+
+                            def kongUrl = env."KONG_ADMIN_URL_${platform.toUpperCase()}_${targetEnv.toUpperCase()}" ?: env.KONG_ADMIN_URL
+
+                            // Write spec to temp file and create ConfigMap
+                            writeFile file: "/tmp/${jobName}-spec.json", text: specContent
+                            sh """
+                                kubectl delete configmap ${jobName}-spec -n ${K8S_NAMESPACE} --ignore-not-found=true
+                                kubectl create configmap ${jobName}-spec -n ${K8S_NAMESPACE} --from-file=spec.json=/tmp/${jobName}-spec.json
+                            """
+
+                            // Create and run K8s Job
+                            def jobManifest = """
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${jobName}
+  namespace: ${K8S_NAMESPACE}
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: provisioner
+        image: ${PROVISIONER_IMAGE}
+        env:
+        - name: ACTION
+          value: "deploy"
+        - name: STACK_NAME
+          value: "${stackName}"
+        - name: KONG_ADMIN_URL
+          value: "${kongUrl}"
+        - name: PLATFORM
+          value: "${platform}"
+        - name: ENVIRONMENT
+          value: "${targetEnv}"
+        - name: STATE_DIR
+          value: "/state"
+        - name: OPENAPI_SPEC_JSON
+          valueFrom:
+            configMapKeyRef:
+              name: ${jobName}-spec
+              key: spec.json
+              optional: true
+        - name: GRAFANA_URL
+          value: "${grafanaUrl}"
+        - name: GRAFANA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: grafana-credentials
+              key: api-key
+        - name: GRAFANA_DASHBOARD_ENABLED
+          value: "${monitoringEnabled}"
+        - name: ALERT_ERROR_RATE_THRESHOLD
+          value: "${errorRateThreshold}"
+        - name: ALERT_P99_LATENCY_MS
+          value: "${p99LatencyMs}"
+        - name: ALERT_NOTIFY_CHANNEL
+          value: "${notifyChannel}"
+        volumeMounts:
+        - name: pulumi-state
+          mountPath: /state
+      volumes:
+      - name: pulumi-state
+        persistentVolumeClaim:
+          claimName: pulumi-state
+"""
+                            writeFile file: "/tmp/${jobName}.yaml", text: jobManifest
+                            sh """
+                                kubectl apply -f /tmp/${jobName}.yaml
+                                kubectl wait --for=condition=complete --timeout=300s job/${jobName} -n ${K8S_NAMESPACE} || \
+                                kubectl wait --for=condition=failed --timeout=10s job/${jobName} -n ${K8S_NAMESPACE}
+
+                                echo "=== Job Logs ==="
+                                kubectl logs job/${jobName} -n ${K8S_NAMESPACE}
+
+                                SUCCEEDED=\$(kubectl get job ${jobName} -n ${K8S_NAMESPACE} -o jsonpath='{.status.succeeded}')
+                                if [ "\$SUCCEEDED" != "1" ]; then
+                                    echo "Job failed!"
+                                    exit 1
+                                fi
+
+                                # Cleanup
+                                kubectl delete job ${jobName} -n ${K8S_NAMESPACE} --ignore-not-found=true
+                                kubectl delete configmap ${jobName}-spec -n ${K8S_NAMESPACE} --ignore-not-found=true
+                            """
+
+                            echo "Deployed ${svc} to ${platform}/${targetEnv} via Pulumi"
+                        }
+
+                        // Grafana monitoring is now provisioned in-stack by Pulumi
+                        // (env vars GRAFANA_* and ALERT_* passed to the K8s Job above)
+                    }
+
+                    // Callback
+                    if (env.APP_CALLBACK_BASE) {
+                        def payload = groovy.json.JsonOutput.toJson([
+                            status: 'SUCCESS',
+                            buildNumber: env.BUILD_NUMBER,
+                            services: env.CHANGED_SERVICES,
+                            environments: env.TARGET_ENVS,
+                            gitRef: env.GIT_REF,
+                            gitTag: env.GIT_TAG ?: null
+                        ])
+                        sh """
+                            curl -s -X POST -H 'Content-Type: application/json' \
+                                -d '${payload}' \
+                                '${env.APP_CALLBACK_BASE}/api/git/webhook' || echo 'Callback failed (non-fatal)'
+                        """
+                    }
+                }
+            }
+        }
+
+        // ─── Direct mode: existing parameter-based flow ───
+        stage('Setup') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' }
+            }
+            steps {
+                script {
+                    echo "Provisioning API: ${params.SPEC_NAME}"
+                    echo "Environment: ${params.ENVIRONMENT}"
+                    echo "Action: ${params.ACTION}"
+                    echo "Platform: ${params.PLATFORM ?: 'default'}"
+                    echo "Kong Admin URL: ${env.KONG_ADMIN_URL}"
+
+                    env.JOB_NAME = "pulumi-${params.SPEC_NAME}-${env.BUILD_NUMBER}".toLowerCase().replaceAll('[^a-z0-9-]', '-').take(63)
+                }
+            }
+        }
+
+        stage('Create ConfigMap') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' && (params.ACTION ?: 'deploy') == 'deploy' }
+            }
+            steps {
+                script {
+                    sh '''
+                        echo "${SPEC_CONTENT}" | base64 -d > /tmp/openapi-spec.json
+                        echo "Decoded spec:"
+                        head -20 /tmp/openapi-spec.json
+
+                        kubectl delete configmap ${JOB_NAME}-spec -n ${K8S_NAMESPACE} --ignore-not-found=true
+                        kubectl create configmap ${JOB_NAME}-spec -n ${K8S_NAMESPACE} --from-file=spec.json=/tmp/openapi-spec.json
+                    '''
+                }
+            }
+        }
+
+        stage('Run Pulumi Job') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' }
+            }
+            steps {
+                script {
+                    def action = params.ACTION
+                    def specName = params.SPEC_NAME
+
+                    def jobManifest = """
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${env.JOB_NAME}
+  namespace: ${env.K8S_NAMESPACE}
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: provisioner
+        image: ${env.PROVISIONER_IMAGE}
+        env:
+        - name: ACTION
+          value: "${action}"
+        - name: STACK_NAME
+          value: "${specName}"
+        - name: KONG_ADMIN_URL
+          value: "${env.KONG_ADMIN_URL}"
+        - name: PLATFORM
+          value: "${params.PLATFORM ?: 'local'}"
+        - name: ENVIRONMENT
+          value: "${params.ENVIRONMENT}"
+        - name: STATE_DIR
+          value: "/state"
+        - name: OPENAPI_SPEC_JSON
+          valueFrom:
+            configMapKeyRef:
+              name: ${env.JOB_NAME}-spec
+              key: spec.json
+              optional: true
+        - name: GRAFANA_URL
+          value: "${env.GRAFANA_URL ?: 'http://grafana.kong-system.svc.cluster.local:3001'}"
+        - name: GRAFANA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: grafana-credentials
+              key: api-key
+        - name: GRAFANA_DASHBOARD_ENABLED
+          value: "true"
+        volumeMounts:
+        - name: pulumi-state
+          mountPath: /state
+      volumes:
+      - name: pulumi-state
+        persistentVolumeClaim:
+          claimName: pulumi-state
+"""
+
+                    writeFile file: "/tmp/${env.JOB_NAME}.yaml", text: jobManifest
+
+                    sh '''
+                        echo "Creating Kubernetes Job..."
+                        kubectl apply -f /tmp/${JOB_NAME}.yaml
+
+                        echo "Waiting for job to complete..."
+                        kubectl wait --for=condition=complete --timeout=300s job/${JOB_NAME} -n ${K8S_NAMESPACE} || \
+                        kubectl wait --for=condition=failed --timeout=10s job/${JOB_NAME} -n ${K8S_NAMESPACE}
+
+                        echo "=== Job Logs ==="
+                        kubectl logs job/${JOB_NAME} -n ${K8S_NAMESPACE}
+
+                        SUCCEEDED=$(kubectl get job ${JOB_NAME} -n ${K8S_NAMESPACE} -o jsonpath='{.status.succeeded}')
+                        if [ "$SUCCEEDED" != "1" ]; then
+                            echo "Job failed!"
+                            exit 1
+                        fi
+
+                        echo "=== Job Completed Successfully ==="
+                    '''
+                }
+            }
+        }
+
+        stage('Get Outputs') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' && (params.ACTION ?: 'deploy') == 'deploy' }
+            }
+            steps {
+                script {
+                    sh '''
+                        kubectl logs job/${JOB_NAME} -n ${K8S_NAMESPACE} | grep -A 100 "=== Deployment Outputs ===" | tail -n +2 | head -1 > /tmp/pulumi-outputs.json || echo "{}" > /tmp/pulumi-outputs.json
+                        echo "Pulumi outputs:"
+                        cat /tmp/pulumi-outputs.json
+                    '''
+                }
+            }
+        }
+
+        stage('Cleanup') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' }
+            }
+            steps {
+                script {
+                    sh '''
+                        kubectl delete job ${JOB_NAME} -n ${K8S_NAMESPACE} --ignore-not-found=true
+                        kubectl delete configmap ${JOB_NAME}-spec -n ${K8S_NAMESPACE} --ignore-not-found=true
+                    '''
+                }
+            }
+        }
+
+        stage('Callback') {
+            when {
+                expression { env.TRIGGER_MODE == 'direct' && params.CALLBACK_URL?.trim() }
+            }
+            steps {
+                script {
+                    def status = currentBuild.result ?: 'SUCCESS'
+                    def kongServiceId = ''
+                    def routesCreated = []
+                    def routesCount = 0
+
+                    try {
+                        def outputsJson = readFile(file: '/tmp/pulumi-outputs.json')
+                        def outputs = new groovy.json.JsonSlurper().parseText(outputsJson)
+                        kongServiceId = outputs.service_id ?: ''
+                        routesCreated = outputs.routes_created ?: []
+                        routesCount = outputs.routes_count ?: 0
+                    } catch (e) {
+                        echo "Could not read Pulumi outputs: ${e.message}"
+                    }
+
+                    def payload = [
+                        status: status,
+                        buildNumber: env.BUILD_NUMBER,
+                        kongServiceId: kongServiceId,
+                        routesCreated: routesCreated,
+                        routesCount: routesCount,
+                        errorMessage: status == 'FAILURE' ? 'Pulumi deployment failed' : null
+                    ]
+
+                    def payloadJson = groovy.json.JsonOutput.toJson(payload)
+                    sh """
+                        curl -s -X POST -H 'Content-Type: application/json' \
+                            -d '${payloadJson}' \
+                            '${params.CALLBACK_URL}' || echo 'Callback failed but continuing'
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Pulumi deployment successful (mode: ${env.TRIGGER_MODE})"
+        }
+        failure {
+            echo "Pulumi deployment failed (mode: ${env.TRIGGER_MODE})"
+
+            script {
+                // Direct mode cleanup + callback
+                if (env.TRIGGER_MODE == 'direct') {
+                    sh '''
+                        kubectl delete job ${JOB_NAME} -n ${K8S_NAMESPACE} --ignore-not-found=true || true
+                        kubectl delete configmap ${JOB_NAME}-spec -n ${K8S_NAMESPACE} --ignore-not-found=true || true
+                    '''
+
+                    if (params.CALLBACK_URL?.trim()) {
+                        try {
+                            def payload = [
+                                status: 'FAILURE',
+                                buildNumber: env.BUILD_NUMBER,
+                                errorMessage: 'Pulumi deployment failed - check Jenkins logs'
+                            ]
+                            def payloadJson = groovy.json.JsonOutput.toJson(payload)
+                            sh """
+                                curl -s -X POST -H 'Content-Type: application/json' \
+                                    -d '${payloadJson}' \
+                                    '${params.CALLBACK_URL}' || echo 'Callback failed'
+                            """
+                        } catch (e) {
+                            echo "Failed to send callback: ${e.message}"
+                        }
+                    }
+                }
+            }
+        }
+        always {
+            deleteDir()
+        }
+    }
+}

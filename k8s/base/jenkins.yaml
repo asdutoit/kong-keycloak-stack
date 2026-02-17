@@ -28,6 +28,8 @@ data:
                 value: http://kong-admin.kong-system.svc.cluster.local:8001
               - key: KEYCLOAK_URL
                 value: http://keycloak.kong-system.svc.cluster.local:8080
+              - key: GRAFANA_URL
+                value: http://grafana.kong-system.svc.cluster.local:3001
     unclassified:
       location:
         url: http://localhost:8081/
@@ -50,7 +52,7 @@ data:
     pipeline-graph-view
     pipeline-stage-view
     build-monitor-plugin
-    http-request
+    pipeline-utility-steps
     ws-cleanup
 ---
 apiVersion: v1
