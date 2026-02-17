@@ -13,6 +13,11 @@ data:
         url: http://prometheus.kong-system.svc.cluster.local:9090
         isDefault: true
         editable: true
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki.kong-system.svc.cluster.local:3100
+        editable: true
 ---
 apiVersion: v1
 kind: ConfigMap

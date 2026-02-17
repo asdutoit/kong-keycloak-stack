@@ -6,15 +6,24 @@ Minimal Kong Gateway with Keycloak, Jenkins, Prometheus, and Grafana for local K
 
 ```
 kong-keycloak-stack/
-├── manifests/
-│   ├── namespace.yaml      # kong-system namespace
-│   ├── postgres.yaml       # PostgreSQL database
-│   ├── keycloak.yaml       # Keycloak identity provider
-│   ├── kong.yaml           # Kong gateway
-│   ├── jenkins.yaml        # Jenkins CI/CD server
-│   ├── httpbin.yaml        # httpbin test backend
-│   ├── prometheus.yaml     # Prometheus metrics collection
-│   └── grafana.yaml        # Grafana dashboards & visualization
+├── k8s/
+│   ├── base/
+│   │   ├── kustomization.yaml  # Lists all resources
+│   │   ├── namespace.yaml      # kong-system namespace
+│   │   ├── postgres.yaml       # PostgreSQL database
+│   │   ├── keycloak.yaml       # Keycloak identity provider
+│   │   ├── kong.yaml           # Kong gateway
+│   │   ├── httpbin.yaml        # httpbin test backend
+│   │   ├── jenkins-rbac.yaml   # Jenkins RBAC
+│   │   ├── jenkins.yaml        # Jenkins CI/CD server
+│   │   ├── prometheus.yaml     # Prometheus metrics collection
+│   │   ├── loki.yaml           # Loki log aggregation
+│   │   ├── promtail.yaml       # Promtail log collector
+│   │   ├── grafana.yaml        # Grafana dashboards & visualization
+│   │   └── pulumi-state-pvc.yaml
+│   └── overlays/
+│       └── local/
+│           └── kustomization.yaml  # Local dev overlay
 ├── scripts/
 │   ├── deploy.sh           # Deploy all services
 │   ├── teardown.sh         # Remove all services

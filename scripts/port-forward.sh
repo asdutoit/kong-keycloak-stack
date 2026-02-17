@@ -15,6 +15,7 @@ kubectl port-forward -n kong-system svc/jenkins 8081:8081 &
 kubectl port-forward -n kong-system svc/postgres 5433:5432 &
 kubectl port-forward -n kong-system svc/httpbin 8082:80 &
 kubectl port-forward -n kong-system svc/prometheus 9090:9090 &
+kubectl port-forward -n kong-system svc/loki 3100:3100 &
 kubectl port-forward -n kong-system svc/grafana 3002:3001 &
 
 sleep 2
@@ -28,6 +29,7 @@ echo "  - Jenkins:      http://localhost:8081"
 echo "  - PostgreSQL:   localhost:5433"
 echo "  - httpbin:      http://localhost:8082"
 echo "  - Prometheus:   http://localhost:9090"
+echo "  - Loki:         http://localhost:3100"
 echo "  - Grafana:      http://localhost:3002 (admin/admin)"
 echo ""
 echo "PostgreSQL Databases:"
