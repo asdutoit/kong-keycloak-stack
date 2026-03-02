@@ -15,7 +15,7 @@ spec:
     spec:
       initContainers:
       - name: kong-migrations
-        image: kong:3.9
+        image: kong/kong:3.9.1
         command: ["kong", "migrations", "bootstrap"]
         env:
         - name: KONG_DATABASE
@@ -30,7 +30,7 @@ spec:
           value: "kong"
       containers:
       - name: kong
-        image: kong:3.9
+        image: kong/kong:3.9.1
         env:
         - name: KONG_DATABASE
           value: "postgres"

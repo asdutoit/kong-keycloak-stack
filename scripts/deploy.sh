@@ -5,6 +5,37 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OVERLAY_DIR="$SCRIPT_DIR/../k8s/overlays/local"
 
+# ─── Select Kubernetes Context ───────────────────────────────────────────────
+CONTEXTS=($(kubectl config get-contexts -o name))
+
+if [ ${#CONTEXTS[@]} -eq 0 ]; then
+  echo "Error: No Kubernetes contexts found. Configure a cluster first."
+  exit 1
+fi
+
+echo "Available Kubernetes contexts:"
+for i in "${!CONTEXTS[@]}"; do
+  current=""
+  if [ "${CONTEXTS[$i]}" = "$(kubectl config current-context)" ]; then
+    current=" (current)"
+  fi
+  echo "  $((i + 1))) ${CONTEXTS[$i]}$current"
+done
+
+echo ""
+read -rp "Select context [1-${#CONTEXTS[@]}]: " selection
+
+if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -lt 1 ] || [ "$selection" -gt ${#CONTEXTS[@]} ]; then
+  echo "Error: Invalid selection."
+  exit 1
+fi
+
+SELECTED_CONTEXT="${CONTEXTS[$((selection - 1))]}"
+echo "Switching to context: $SELECTED_CONTEXT"
+kubectl config use-context "$SELECTED_CONTEXT"
+echo ""
+
+# ─── Deploy Stack ────────────────────────────────────────────────────────────
 echo "Deploying Kong + Keycloak + Jenkins + Monitoring stack..."
 
 # Apply all resources via Kustomize
