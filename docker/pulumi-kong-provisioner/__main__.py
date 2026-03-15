@@ -50,8 +50,13 @@ end
 """.strip()
 
 
-# Load OpenAPI spec from environment
-spec_json = os.environ.get("OPENAPI_SPEC_JSON", "{}")
+# Load OpenAPI spec from file (preferred, DinD-safe) or environment variable
+spec_file = os.environ.get("OPENAPI_SPEC_FILE")
+if spec_file and os.path.exists(spec_file):
+    with open(spec_file) as f:
+        spec_json = f.read()
+else:
+    spec_json = os.environ.get("OPENAPI_SPEC_JSON", "{}")
 spec = json.loads(spec_json)
 
 # Extract metadata
@@ -63,15 +68,23 @@ api_version = info.get("version", "1.0.0")
 environment = os.environ.get("ENVIRONMENT", "dev")
 env_suffix = "" if environment in ("prod", "production") else f"-{environment}"
 
-# Sanitize names (with environment suffix for non-prod)
+# Spec ID (used for tagging, not for naming — uniqueness enforced at app level per platform)
+spec_id = os.environ.get("SPEC_ID", "")
+
+# Sanitize names (with environment suffix only — clean URLs like /httpbin-dev)
 api_name = sanitize_name(api_title) + env_suffix
 resource_name = sanitize_resource_name(api_title) + env_suffix
 
 # Get service configuration
+# Per-environment upstream URL override (set by Jenkins from promotion request)
+upstream_url_override = os.environ.get("UPSTREAM_URL")
 service_defaults = spec.get("x-kong-service-defaults", {})
-upstream_url = service_defaults.get("url") or (
-    spec.get("servers", [{}])[0].get("url", "http://localhost:8080")
-)
+if upstream_url_override:
+    upstream_url = upstream_url_override
+else:
+    upstream_url = service_defaults.get("url") or (
+        spec.get("servers", [{}])[0].get("url", "http://localhost:8080")
+    )
 
 # Parse URL
 parsed = urlparse(upstream_url)
@@ -87,6 +100,20 @@ if not host:
         "Configure x-kong-service-defaults.url with a full URL"
     )
 
+# Build service tags with owner metadata (makes it easy to identify owners in Kong)
+service_tags = [api_name, f"v{api_version}"]
+owner_name = os.environ.get("OWNER_NAME")
+owner_email = os.environ.get("OWNER_EMAIL")
+team_name = os.environ.get("TEAM_NAME")
+if spec_id:
+    service_tags.append(f"spec-id:{spec_id}")
+if owner_email:
+    service_tags.append(f"owner:{owner_email}")
+if owner_name:
+    service_tags.append(f"owner-name:{owner_name}")
+if team_name:
+    service_tags.append(f"team:{team_name}")
+
 # Create Service
 service = kong.Service(
     f"{resource_name}-service",
@@ -98,14 +125,14 @@ service = kong.Service(
     connect_timeout=service_defaults.get("connect_timeout", 60000),
     write_timeout=service_defaults.get("write_timeout", 60000),
     read_timeout=service_defaults.get("read_timeout", 60000),
-    tags=[api_name, f"v{api_version}"],
+    tags=service_tags,
 )
 
 # Get route prefix configuration
 route_prefix_config = spec.get("x-kong-route-prefix", {})
 # Default prefix uses resource_name which already has env suffix
 route_prefix = route_prefix_config.get("prefix", f"/{resource_name}").rstrip("/")
-# If a custom prefix is set, append env suffix to it too
+# If a custom prefix is set, append env suffix to it
 if route_prefix_config.get("prefix") and env_suffix:
     route_prefix = route_prefix + env_suffix
 strip_prefix = route_prefix_config.get("stripPrefix", True)
@@ -176,7 +203,7 @@ for path, path_item in paths.items():
             service_id=service.id,
             protocols=["http", "https"],
             paths=[kong_path],
-            methods=[method.upper()],
+            methods=[method.upper(), "OPTIONS"],
             strip_path=False,  # We handle prefix stripping via pre-function plugin
             tags=[api_name, f"v{api_version}", method, f"path:{path_tag}"],
         )
