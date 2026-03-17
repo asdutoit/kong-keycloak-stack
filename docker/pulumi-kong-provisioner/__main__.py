@@ -142,11 +142,24 @@ strip_prefix = route_prefix_config.get("stripPrefix", True)
 use_prefix_strip_plugin = strip_prefix and route_prefix
 
 # Service-level plugins (from x-kong-plugin-* at spec root)
+# Note: pre-function/post-function are deferred and merged into route-level plugins
+# to avoid Kong's plugin precedence silently blocking service-level instances
+# (route-level same-name plugin wins and service-level never executes).
+svc_pre_function_config: dict = {}
+svc_post_function_config: dict = {}
+
 for key, value in spec.items():
     if not key.startswith("x-kong-plugin-") or not isinstance(value, dict):
         continue
     plugin_name = key.replace("x-kong-plugin-", "")
     plugin_config = value.get("config", {})
+
+    if plugin_name == "pre-function":
+        svc_pre_function_config = plugin_config
+        continue
+    if plugin_name == "post-function":
+        svc_post_function_config = plugin_config
+        continue
 
     kong.Plugin(
         f"{resource_name}-svc-{plugin_name}",
@@ -209,16 +222,46 @@ for path, path_item in paths.items():
         )
         routes_created.append(route_name)
 
-        # Add pre-function plugin to strip prefix if needed
-        if use_prefix_strip_plugin:
+        # Add pre-function plugin (prefix stripping + any service-level pre-functions)
+        # Merged into a single route-level plugin because Kong only runs
+        # the most specific scope — a route-level plugin blocks a service-level one.
+        if use_prefix_strip_plugin or svc_pre_function_config:
+            access_fns = []
+            if use_prefix_strip_plugin:
+                access_fns.append(prefix_strip_lua)
+            # Wrap each user function with an OPTIONS guard so CORS preflight
+            # requests pass through to the CORS plugin instead of being blocked
+            for fn_code in svc_pre_function_config.get("access", []):
+                wrapped = (
+                    'if kong.request.get_method() == "OPTIONS" then return end\n'
+                    + fn_code
+                )
+                access_fns.append(wrapped)
+
+            pre_fn_config: dict = {}
+            if access_fns:
+                pre_fn_config["access"] = access_fns
+            for phase in ("header_filter", "body_filter", "log"):
+                phase_fns = svc_pre_function_config.get(phase, [])
+                if phase_fns:
+                    pre_fn_config[phase] = phase_fns
+
             kong.Plugin(
-                f"{route_resource_name}-prefix-strip",
+                f"{route_resource_name}-pre-function",
                 name="pre-function",
                 route_id=route.id,
-                config_json=pulumi.Output.json_dumps({
-                    "access": [prefix_strip_lua],
-                }),
-                tags=[api_name, f"v{api_version}", "prefix-strip"],
+                config_json=pulumi.Output.json_dumps(pre_fn_config),
+                tags=[api_name, f"v{api_version}", "pre-function"],
+            )
+
+        # Add post-function plugin at route level if configured
+        if svc_post_function_config:
+            kong.Plugin(
+                f"{route_resource_name}-post-function",
+                name="post-function",
+                route_id=route.id,
+                config_json=pulumi.Output.json_dumps(svc_post_function_config),
+                tags=[api_name, f"v{api_version}", "post-function"],
             )
 
         # Collect operation-level plugins
