@@ -7,7 +7,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy Pulumi program
-COPY __main__.py .
+COPY __main__.py utils.py spec_loader.py service.py plugins.py routes.py grafana.py ./
 COPY Pulumi.yaml .
 COPY entrypoint.sh .
 
