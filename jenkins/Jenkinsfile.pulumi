@@ -21,6 +21,7 @@ pipeline {
         string(name: 'ACTION', defaultValue: 'deploy', description: 'Action: deploy or destroy')
         string(name: 'KONG_ADMIN_URL', defaultValue: '', description: 'Kong Admin URL')
         string(name: 'PLATFORM', defaultValue: '', description: 'Platform slug')
+        booleanParam(name: 'IS_LOCAL', defaultValue: false, description: 'Single-cluster platform — adds env suffix to deployed paths so envs sharing one Kong do not collide')
     }
 
     environment {
@@ -191,6 +192,8 @@ spec:
           value: "${targetEnv}"
         - name: STATE_DIR
           value: "/state"
+        - name: PATH_INCLUDES_ENV_SUFFIX
+          value: "${params.IS_LOCAL == true ? 'true' : 'false'}"
         - name: OPENAPI_SPEC_JSON
           valueFrom:
             configMapKeyRef:
@@ -223,15 +226,26 @@ spec:
                             writeFile file: "/tmp/${jobName}.yaml", text: jobManifest
                             sh """
                                 kubectl apply -f /tmp/${jobName}.yaml
-                                kubectl wait --for=condition=complete --timeout=300s job/${jobName} -n ${K8S_NAMESPACE} || \
-                                kubectl wait --for=condition=failed --timeout=10s job/${jobName} -n ${K8S_NAMESPACE}
+
+                                # Poll for either Complete=True or Failed=True (see Run Pulumi Job stage for context).
+                                echo "Waiting for job to finish..."
+                                SECONDS_WAITED=0
+                                while [ \$SECONDS_WAITED -lt 300 ]; do
+                                    COMPLETE=\$(kubectl get job ${jobName} -n ${K8S_NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || echo "")
+                                    FAILED=\$(kubectl get job ${jobName} -n ${K8S_NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || echo "")
+                                    if [ "\$COMPLETE" = "True" ] || [ "\$FAILED" = "True" ]; then
+                                        break
+                                    fi
+                                    sleep 2
+                                    SECONDS_WAITED=\$((SECONDS_WAITED + 2))
+                                done
 
                                 echo "=== Job Logs ==="
-                                kubectl logs job/${jobName} -n ${K8S_NAMESPACE}
+                                kubectl logs job/${jobName} -n ${K8S_NAMESPACE} || true
 
                                 SUCCEEDED=\$(kubectl get job ${jobName} -n ${K8S_NAMESPACE} -o jsonpath='{.status.succeeded}')
                                 if [ "\$SUCCEEDED" != "1" ]; then
-                                    echo "Job failed!"
+                                    echo "Job failed (Complete=\$COMPLETE Failed=\$FAILED waited=\${SECONDS_WAITED}s)"
                                     exit 1
                                 fi
 
@@ -340,6 +354,8 @@ spec:
           value: "${params.ENVIRONMENT}"
         - name: STATE_DIR
           value: "/state"
+        - name: PATH_INCLUDES_ENV_SUFFIX
+          value: "${params.IS_LOCAL == true ? 'true' : 'false'}"
         - name: OPENAPI_SPEC_JSON
           valueFrom:
             configMapKeyRef:
@@ -370,16 +386,28 @@ spec:
                         echo "Creating Kubernetes Job..."
                         kubectl apply -f /tmp/${JOB_NAME}.yaml
 
-                        echo "Waiting for job to complete..."
-                        kubectl wait --for=condition=complete --timeout=300s job/${JOB_NAME} -n ${K8S_NAMESPACE} || \
-                        kubectl wait --for=condition=failed --timeout=10s job/${JOB_NAME} -n ${K8S_NAMESPACE}
+                        # Poll for either Complete=True or Failed=True. kubectl
+                        # wait --for=condition=complete only resolves on success
+                        # — when the Job is Failed, that wait still hangs until
+                        # the timeout. Poll both conditions so we exit promptly.
+                        echo "Waiting for job to finish (success or failure)..."
+                        SECONDS_WAITED=0
+                        while [ $SECONDS_WAITED -lt 300 ]; do
+                            COMPLETE=$(kubectl get job ${JOB_NAME} -n ${K8S_NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || echo "")
+                            FAILED=$(kubectl get job ${JOB_NAME} -n ${K8S_NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || echo "")
+                            if [ "$COMPLETE" = "True" ] || [ "$FAILED" = "True" ]; then
+                                break
+                            fi
+                            sleep 2
+                            SECONDS_WAITED=$((SECONDS_WAITED + 2))
+                        done
 
                         echo "=== Job Logs ==="
-                        kubectl logs job/${JOB_NAME} -n ${K8S_NAMESPACE}
+                        kubectl logs job/${JOB_NAME} -n ${K8S_NAMESPACE} || true
 
                         SUCCEEDED=$(kubectl get job ${JOB_NAME} -n ${K8S_NAMESPACE} -o jsonpath='{.status.succeeded}')
                         if [ "$SUCCEEDED" != "1" ]; then
-                            echo "Job failed!"
+                            echo "Job failed (Complete=$COMPLETE Failed=$FAILED waited=${SECONDS_WAITED}s)"
                             exit 1
                         fi
 
@@ -396,7 +424,21 @@ spec:
             steps {
                 script {
                     sh '''
-                        kubectl logs job/${JOB_NAME} -n ${K8S_NAMESPACE} | grep -A 100 "=== Deployment Outputs ===" | tail -n +2 | head -1 > /tmp/pulumi-outputs.json || echo "{}" > /tmp/pulumi-outputs.json
+                        # Use the PULUMI_OUTPUTS_JSON= marker the entrypoint emits — that's a
+                        # guaranteed single-line JSON, immune to pretty-printing changes in
+                        # `pulumi stack output --json`. Old grep-and-head-1 approach truncated
+                        # multi-line JSON to just the opening "{".
+                        kubectl logs job/${JOB_NAME} -n ${K8S_NAMESPACE} \
+                            | grep "^PULUMI_OUTPUTS_JSON=" \
+                            | tail -1 \
+                            | sed 's/^PULUMI_OUTPUTS_JSON=//' \
+                            > /tmp/pulumi-outputs.json || true
+
+                        if [ ! -s /tmp/pulumi-outputs.json ]; then
+                            echo "Warning: PULUMI_OUTPUTS_JSON marker not found in job logs"
+                            echo "{}" > /tmp/pulumi-outputs.json
+                        fi
+
                         echo "Pulumi outputs:"
                         cat /tmp/pulumi-outputs.json
                     '''
@@ -469,22 +511,54 @@ spec:
             script {
                 // Direct mode cleanup + callback
                 if (env.TRIGGER_MODE == 'direct') {
+                    // Pull a useful error message from the job's pod logs BEFORE deleting
+                    // the job. We grep for Pulumi's own error markers and fall back to
+                    // the tail of the log. Output is captured into a file so we can read
+                    // it from Groovy and put it in the callback payload.
                     sh '''
+                        if kubectl get job ${JOB_NAME} -n ${K8S_NAMESPACE} >/dev/null 2>&1; then
+                            kubectl logs job/${JOB_NAME} -n ${K8S_NAMESPACE} > /tmp/pod-full-log.txt 2>&1 || true
+
+                            # Extract Pulumi error sections — these tend to follow "error:" or
+                            # "**failed**" lines. Cap to ~20 lines so the callback payload is
+                            # bounded; full log stays in Jenkins.
+                            (grep -E "(^error:|\\*\\*failed\\*\\*|message:|HTTP status)" /tmp/pod-full-log.txt \
+                                || tail -20 /tmp/pod-full-log.txt) \
+                                | tail -20 > /tmp/pod-error.txt 2>/dev/null || true
+                        fi
+
+                        # Defensive defaults if no log was captured
+                        [ -s /tmp/pod-error.txt ] || echo "Pulumi job did not produce log output. Check Jenkins console for pod-creation errors." > /tmp/pod-error.txt
+
+                        # Cleanup pod resources after extraction
                         kubectl delete job ${JOB_NAME} -n ${K8S_NAMESPACE} --ignore-not-found=true || true
                         kubectl delete configmap ${JOB_NAME}-spec -n ${K8S_NAMESPACE} --ignore-not-found=true || true
                     '''
 
                     if (params.CALLBACK_URL?.trim()) {
                         try {
+                            def errorExcerpt = ''
+                            try {
+                                errorExcerpt = readFile('/tmp/pod-error.txt').trim()
+                            } catch (ignored) { /* file may be missing if extraction failed */ }
+
+                            // Cap message to 4KB so we don't blow up the callback request body
+                            if (errorExcerpt.length() > 4000) {
+                                errorExcerpt = errorExcerpt.substring(errorExcerpt.length() - 4000)
+                            }
+
                             def payload = [
                                 status: 'FAILURE',
                                 buildNumber: env.BUILD_NUMBER,
-                                errorMessage: 'Pulumi deployment failed - check Jenkins logs'
+                                errorMessage: errorExcerpt ?: 'Pulumi deployment failed - check Jenkins logs'
                             ]
                             def payloadJson = groovy.json.JsonOutput.toJson(payload)
+                            // Use a file so the JSON survives shell quoting (handles newlines,
+                            // quotes, $ characters in the error message).
+                            writeFile file: '/tmp/callback-payload.json', text: payloadJson
                             sh """
                                 curl -s -X POST -H 'Content-Type: application/json' \
-                                    -d '${payloadJson}' \
+                                    --data-binary @/tmp/callback-payload.json \
                                     '${params.CALLBACK_URL}' || echo 'Callback failed'
                             """
                         } catch (e) {

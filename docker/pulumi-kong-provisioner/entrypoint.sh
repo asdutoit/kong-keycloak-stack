@@ -87,6 +87,17 @@ cleanup_legacy_kong_resources() {
     echo "  Removing service: ${service_name}"
     kong_curl DELETE "/services/${service_name}" || true
 
+    # Delete the upstream (Pulumi creates "<service_name>-upstream"). Upstreams
+    # are independent of services in Kong's data model, so deleting the service
+    # leaves them behind — and a stale upstream will collide with the new
+    # target on the next deploy ("UNIQUE violation"). Deleting an upstream
+    # cascades to its targets in Kong.
+    local upstream_name="${service_name}-upstream"
+    if kong_curl GET "/upstreams/${upstream_name}" >/dev/null 2>&1; then
+        echo "  Removing upstream: ${upstream_name}"
+        kong_curl DELETE "/upstreams/${upstream_name}" || true
+    fi
+
     echo "=== Legacy cleanup complete ==="
 }
 
