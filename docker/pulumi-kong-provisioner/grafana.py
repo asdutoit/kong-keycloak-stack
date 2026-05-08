@@ -6,6 +6,7 @@ Provisions a 6-panel dashboard and optional alert rules for the Kong service.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -53,9 +54,30 @@ def provision_grafana(api_name: str, environment: str) -> None:
     _provision_alerts(api_name, grafana_provider)
 
 
+_GRAFANA_UID_MAX = 40
+
+
+def _safe_dashboard_uid(*parts: str) -> str:
+    """Build a Grafana-safe dashboard UID.
+
+    Grafana rejects UIDs longer than 40 characters and only accepts
+    [a-zA-Z0-9-]. Short composed names are returned verbatim (after
+    sanitization); longer ones are truncated and suffixed with an 8-char
+    hash of the full raw string so two services with the same 31-char
+    prefix still get distinct UIDs.
+    """
+    raw = "-".join(p for p in parts if p)
+    sanitized = re.sub(r"[^a-zA-Z0-9-]", "-", raw).strip("-")
+    if len(sanitized) <= _GRAFANA_UID_MAX:
+        return sanitized
+    digest = hashlib.sha1(sanitized.encode()).hexdigest()[:8]
+    # 31 readable chars + "-" + 8 hash chars = 40.
+    return f"{sanitized[:31].rstrip('-')}-{digest}"
+
+
 def _build_dashboard(service_name: str, platform: str, environment: str) -> dict:
     """Build the 6-panel Grafana dashboard JSON."""
-    uid = re.sub(r"[^a-zA-Z0-9-]", "-", f"{service_name}-{platform}-{environment}")
+    uid = _safe_dashboard_uid(service_name, platform, environment)
     title = f"{service_name} — {platform}/{environment}"
     datasource = {"type": "prometheus", "uid": "prometheus"}
 
