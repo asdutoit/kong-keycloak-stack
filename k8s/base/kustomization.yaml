@@ -6,6 +6,7 @@ resources:
   - postgres.yaml
   - keycloak.yaml
   - kong.yaml
+  - kong-bootstrap.yaml
   - httpbin.yaml
   - jenkins-rbac.yaml
   - jenkins.yaml

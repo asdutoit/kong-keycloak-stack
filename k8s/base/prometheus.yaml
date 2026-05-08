@@ -15,17 +15,11 @@ data:
         static_configs:
           - targets: ["localhost:9090"]
 
-      # Scrape Kong metrics (requires Prometheus plugin enabled)
+      # Scrape Kong metrics (requires Prometheus plugin enabled globally)
       - job_name: "kong"
         static_configs:
-          - targets: ["kong-proxy.kong-system.svc.cluster.local:8001"]
-        metrics_path: /metrics
-
-      # Scrape Kong status endpoint
-      - job_name: "kong-status"
-        static_configs:
           - targets: ["kong-admin.kong-system.svc.cluster.local:8001"]
-        metrics_path: /status
+        metrics_path: /metrics
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

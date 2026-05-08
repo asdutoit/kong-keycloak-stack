@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kong-bootstrap-prometheus
+  namespace: kong-system
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: curlimages/curl:8.10.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              ADMIN="http://kong-admin.kong-system.svc.cluster.local:8001"
+
+              echo "Waiting for Kong admin API..."
+              until curl -fsS "$ADMIN/status" >/dev/null 2>&1; do
+                sleep 2
+              done
+
+              echo "Checking for existing global prometheus plugin..."
+              if curl -fsS "$ADMIN/plugins" | grep -q '"name":"prometheus"'; then
+                echo "Prometheus plugin already exists — nothing to do."
+                exit 0
+              fi
+
+              echo "Enabling prometheus plugin globally..."
+              curl -fsS -X POST "$ADMIN/plugins" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "name": "prometheus",
+                  "config": {
+                    "per_consumer": true,
+                    "status_code_metrics": true,
+                    "latency_metrics": true,
+                    "bandwidth_metrics": true,
+                    "upstream_health_metrics": true
+                  }
+                }'
+              echo "\nDone."

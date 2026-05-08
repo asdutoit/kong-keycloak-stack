@@ -12,7 +12,7 @@ kubectl port-forward -n kong-system svc/kong-proxy 8000:8000 &
 kubectl port-forward -n kong-system svc/kong-admin 8001:8001 &
 kubectl port-forward -n kong-system svc/kong-manager 8002:8002 &
 kubectl port-forward -n kong-system svc/jenkins 8081:8081 &
-kubectl port-forward -n kong-system svc/postgres 5433:5432 &
+# kubectl port-forward -n kong-system svc/postgres 5433:5432 &
 kubectl port-forward -n kong-system svc/httpbin 8082:80 &
 kubectl port-forward -n kong-system svc/prometheus 9090:9090 &
 kubectl port-forward -n kong-system svc/loki 3100:3100 &
