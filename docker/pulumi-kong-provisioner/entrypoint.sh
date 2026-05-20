@@ -7,13 +7,45 @@ KONG_ADMIN_URL="${KONG_ADMIN_URL:-http://kong-admin:8001}"
 STATE_DIR="${STATE_DIR:-/state}"
 KONG_TLS_SKIP_VERIFY="${KONG_TLS_SKIP_VERIFY:-false}"
 
+# State-backend selection. Cloud is the production default; the legacy
+# file:// path stays available as a fallback when the Azure vars are
+# absent (useful for local development against a workstation Kong).
+#
+# Required for the cloud backend:
+#   AZURE_STORAGE_ACCOUNT     — storage account name (e.g. sttmacshdeuww6dhe001)
+#   AZURE_STORAGE_KEY         — account access key (kept in a K8s Secret)
+#   AZURE_STORAGE_CONTAINER   — blob container name (defaults to
+#                                pulumi-api-onboarding-state)
+#   PULUMI_CONFIG_PASSPHRASE  — passphrase used to encrypt config + secrets
+#                                stored in stack files
+#
+# Pulumi's azblob backend natively uses blob leases for state locking,
+# so concurrent stack operations are mutually exclusive without any
+# extra work here.
+AZURE_STORAGE_CONTAINER="${AZURE_STORAGE_CONTAINER:-pulumi-api-onboarding-state}"
+
 # Configure Kong provider env vars
 export KONG_ADMIN_ADDR="$KONG_ADMIN_URL"
 
-# Login to local state (stored in mounted volume)
 mkdir -p "$STATE_DIR"
 export PULUMI_HOME="$STATE_DIR/.pulumi"
-pulumi login "file://$STATE_DIR"
+
+if [ -n "$AZURE_STORAGE_ACCOUNT" ] && [ -n "$AZURE_STORAGE_KEY" ]; then
+    echo "Using Azure Blob backend: $AZURE_STORAGE_CONTAINER on $AZURE_STORAGE_ACCOUNT"
+    if [ -z "$PULUMI_CONFIG_PASSPHRASE" ]; then
+        echo "ERROR: PULUMI_CONFIG_PASSPHRASE must be set when using the cloud backend." >&2
+        exit 1
+    fi
+    # The Azure SDK Pulumi uses reads AZURE_STORAGE_ACCOUNT + AZURE_STORAGE_KEY
+    # automatically; we just need to export them so child processes see them.
+    export AZURE_STORAGE_ACCOUNT
+    export AZURE_STORAGE_KEY
+    pulumi login "azblob://${AZURE_STORAGE_CONTAINER}"
+else
+    echo "WARNING: AZURE_STORAGE_ACCOUNT/KEY not set — falling back to file://${STATE_DIR}"
+    echo "         (No locking, no central audit. Only acceptable for local dev.)"
+    pulumi login "file://$STATE_DIR"
+fi
 
 cd /app
 
