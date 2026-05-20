@@ -5,7 +5,12 @@ metadata:
   namespace: kong-system
 data:
   init-app-db.sql: |
-    -- Create app database and user for Next.js applications
+    -- Create the two app databases used by the api-onboarding app:
+    --   appdb            — Internal portal (full wizard + producer flows)
+    --   appdb_external   — External developer portal (catalog + key requests)
+    -- Both share the same `appuser`; the two-app split mirrors the
+    -- production deployment topology (Internal on EW-MC, External on
+    -- NS-BC) so local dev can exercise the cross-portal webhook flow.
     CREATE DATABASE appdb;
     CREATE USER appuser WITH ENCRYPTED PASSWORD 'apppass' CREATEDB;
     GRANT ALL PRIVILEGES ON DATABASE appdb TO appuser;
@@ -13,6 +18,22 @@ data:
     \c appdb
     GRANT ALL ON SCHEMA public TO appuser;
     ALTER SCHEMA public OWNER TO appuser;
+
+    \c postgres
+    CREATE DATABASE appdb_external;
+    GRANT ALL PRIVILEGES ON DATABASE appdb_external TO appuser;
+    ALTER DATABASE appdb_external OWNER TO appuser;
+    \c appdb_external
+    GRANT ALL ON SCHEMA public TO appuser;
+    ALTER SCHEMA public OWNER TO appuser;
+
+    -- Keycloak — replaces the default in-memory H2 DB so realms/users
+    -- survive Keycloak pod restarts. Matches KC_DB_USERNAME / KC_DB_PASSWORD
+    -- in k8s/base/keycloak.yaml.
+    \c postgres
+    CREATE USER keycloak WITH ENCRYPTED PASSWORD 'keycloakpass';
+    CREATE DATABASE keycloak OWNER keycloak;
+    GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak;
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

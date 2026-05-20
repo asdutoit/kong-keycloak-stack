@@ -28,6 +28,16 @@ spec:
           value: "false"
         - name: KC_HEALTH_ENABLED
           value: "true"
+        # Persistent storage — without these, Keycloak falls back to an
+        # in-memory H2 DB and every pod restart wipes realms/users.
+        - name: KC_DB
+          value: postgres
+        - name: KC_DB_URL
+          value: jdbc:postgresql://postgres.kong-system.svc.cluster.local:5432/keycloak
+        - name: KC_DB_USERNAME
+          value: keycloak
+        - name: KC_DB_PASSWORD
+          value: keycloakpass
         ports:
         - containerPort: 8080
           name: http

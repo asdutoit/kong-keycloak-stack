@@ -193,7 +193,7 @@ spec:
         - name: STATE_DIR
           value: "/state"
         - name: PATH_INCLUDES_ENV_SUFFIX
-          value: "${params.IS_LOCAL == true ? 'true' : 'false'}"
+          value: "${params.IS_LOCAL.toString().toLowerCase() == 'true' ? 'true' : 'false'}"
         - name: OPENAPI_SPEC_JSON
           valueFrom:
             configMapKeyRef:
@@ -355,7 +355,7 @@ spec:
         - name: STATE_DIR
           value: "/state"
         - name: PATH_INCLUDES_ENV_SUFFIX
-          value: "${params.IS_LOCAL == true ? 'true' : 'false'}"
+          value: "${params.IS_LOCAL.toString().toLowerCase() == 'true' ? 'true' : 'false'}"
         - name: OPENAPI_SPEC_JSON
           valueFrom:
             configMapKeyRef:
