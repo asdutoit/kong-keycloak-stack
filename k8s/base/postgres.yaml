@@ -26,6 +26,14 @@ data:
     \c appdb_external
     GRANT ALL ON SCHEMA public TO appuser;
     ALTER SCHEMA public OWNER TO appuser;
+
+    -- Keycloak — replaces the default in-memory H2 DB so realms/users
+    -- survive Keycloak pod restarts. Matches KC_DB_USERNAME / KC_DB_PASSWORD
+    -- in k8s/base/keycloak.yaml.
+    \c postgres
+    CREATE USER keycloak WITH ENCRYPTED PASSWORD 'keycloakpass';
+    CREATE DATABASE keycloak OWNER keycloak;
+    GRANT ALL PRIVILEGES ON DATABASE keycloak TO keycloak;
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

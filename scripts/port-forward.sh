@@ -7,7 +7,7 @@ echo ""
 pkill -f "port-forward.*kong-system" 2>/dev/null || true
 
 # Start port-forwards in background
-kubectl port-forward -n kong-system svc/keycloak 8080:8080 &
+kubectl port-forward -n kong-system --address 0.0.0.0 svc/keycloak 8080:8080 &
 kubectl port-forward -n kong-system svc/kong-proxy 8000:8000 &
 kubectl port-forward -n kong-system svc/kong-admin 8001:8001 &
 kubectl port-forward -n kong-system svc/kong-manager 8002:8002 &
