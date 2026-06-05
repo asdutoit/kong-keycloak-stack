@@ -1,0 +1,7 @@
+# Local-only image: stock Keycloak + the api-portal login theme baked in as a
+# raw theme directory (start-dev serves themes/ without a kc.sh build step).
+# For Docker Desktop K8s the cluster shares the local image store, so this is
+# just `docker build` — no push / no kind load. The durable org build lives in
+# tmac later.
+FROM quay.io/keycloak/keycloak:26.5
+COPY dist_keycloak/theme/api-portal /opt/keycloak/themes/api-portal

@@ -1,0 +1,283 @@
+/* ------------------------------------------------------------------
+   API Onboarding Portal — Keycloak login theme (api-portal)
+   Ported from the app's portal-design-tokens.css so the Keycloak login
+   page matches the portal's /signin design 1:1. Self-hosted IBM Plex
+   (no CDN) so it works air-gapped.
+------------------------------------------------------------------- */
+
+/* IBM Plex — only the weights the login uses */
+@import "@fontsource/ibm-plex-sans/300.css";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-serif/400-italic.css";
+
+.lp {
+  --navy-950: #070f1c;
+  --navy-900: #0a1628;
+  --navy-800: #0f1d33;
+  --navy-700: #14233d;
+  --navy-600: #1b2e4d;
+  --navy-500: #28406a;
+  --navy-brand: #014694;
+  --navy-line: #1e2f4d;
+
+  --orange-500: #e8843f;
+  --orange-600: #c96a2a;
+  --orange-400: #f0a06a;
+  --orange-glow: rgba(232, 132, 63, 0.18);
+
+  --ink-100: #f2eee5;
+  --ink-200: #d9dce3;
+  --ink-300: #a6b3cc;
+  --ink-400: #6e7e9c;
+  --ink-500: #4a5a78;
+
+  --success: #4bae5a;
+  --warn: #c9b86e;
+
+  --font-portal-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-portal-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+}
+
+/* Keycloak injects its own <html>/<body>; reset them so the .lp shell
+   can own the full viewport. (No background here — the .lp shell paints
+   its own, and we don't want to tint the still-default non-login pages.) */
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+.lp {
+  min-height: 100vh;
+  width: 100%;
+  background: var(--navy-900);
+  color: var(--ink-100);
+  font-family: var(--font-portal-sans);
+  position: relative;
+  overflow-x: hidden;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+.lp * { box-sizing: border-box; }
+
+/* Aura + grid overlays */
+.lp::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 600px at 80% -10%, rgba(232, 132, 63, 0.08), transparent 60%),
+    radial-gradient(800px 500px at -10% 80%, rgba(1, 70, 148, 0.35), transparent 60%);
+  z-index: 0;
+}
+.lp .bg-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 64px 64px;
+  pointer-events: none;
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 30%, black 30%, transparent 80%);
+  z-index: 1;
+}
+
+/* Buttons */
+.lp .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-portal-sans);
+  font-weight: 500;
+  font-size: 14px;
+  padding: 10px 18px;
+  border-radius: 4px;
+  transition: all 140ms ease;
+  text-decoration: none;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+}
+.lp .btn-primary { background: var(--orange-500); color: #1a0d05; }
+.lp .btn-primary:hover {
+  background: var(--orange-400);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 30px -10px var(--orange-glow);
+}
+.lp .btn-primary:disabled { opacity: 0.6; cursor: default; transform: none; box-shadow: none; }
+.lp .btn-ghost { background: transparent; color: var(--ink-200); border: 1px solid var(--navy-600); }
+.lp .btn-ghost:hover { border-color: var(--ink-300); color: var(--ink-100); }
+.lp .btn-lg { padding: 14px 24px; font-size: 15px; }
+
+/* Eyebrow / kicker / status pill */
+.lp .eyebrow {
+  font-family: var(--font-portal-mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--orange-500);
+  font-weight: 500;
+}
+
+/* Form controls */
+.lp .lp-field { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+/* Two-up row (e.g. first / last name on the register form) */
+.lp .lp-field-row { display: flex; gap: 14px; }
+@media (max-width: 480px) {
+  .lp .lp-field-row { flex-direction: column; gap: 0; }
+}
+.lp .lp-label {
+  font-family: var(--font-portal-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-300);
+}
+.lp .lp-input-wrap { position: relative; display: flex; align-items: center; }
+.lp .lp-input {
+  width: 100%;
+  background: var(--navy-800);
+  border: 1px solid var(--navy-600);
+  border-radius: 4px;
+  padding: 12px 14px;
+  color: var(--ink-100);
+  font-family: var(--font-portal-sans);
+  font-size: 14px;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+.lp .lp-input::placeholder { color: var(--ink-500); }
+.lp .lp-input:focus {
+  outline: none;
+  border-color: var(--orange-500);
+  box-shadow: 0 0 0 3px rgba(232, 132, 63, 0.15);
+}
+.lp .lp-input[aria-invalid="true"] { border-color: #d56a5a; }
+.lp .lp-reveal {
+  position: absolute;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: var(--ink-400);
+  cursor: pointer;
+  font-family: var(--font-portal-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 6px;
+}
+.lp .lp-reveal:hover { color: var(--ink-200); }
+.lp .lp-field-error {
+  color: #e89a8f;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.lp .lp-banner {
+  border-radius: 4px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  margin-bottom: 22px;
+  border: 1px solid var(--navy-600);
+  background: var(--navy-800);
+  color: var(--ink-200);
+}
+.lp .lp-banner.error { border-color: rgba(213, 106, 90, 0.5); color: #e89a8f; }
+.lp .lp-banner.success { border-color: rgba(75, 174, 90, 0.5); color: #8fd49a; }
+.lp .lp-banner.warning { border-color: rgba(201, 184, 110, 0.5); color: var(--warn); }
+
+/* Code panel — always dark */
+.lp .code-panel {
+  background: var(--navy-800);
+  border: 1px solid var(--navy-line);
+  border-radius: 6px;
+  font-family: var(--font-portal-mono);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--ink-200);
+  overflow: hidden;
+  box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.5),
+              0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+}
+.lp .code-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--navy-line);
+  background: var(--navy-700);
+}
+.lp .code-panel-tabs {
+  display: flex;
+  gap: 20px;
+  font-size: 11px;
+  color: var(--ink-400);
+  letter-spacing: 0.05em;
+}
+.lp .code-panel-tabs .tab { padding-bottom: 2px; border-bottom: 1px solid transparent; }
+.lp .code-panel-tabs .tab.active { color: var(--ink-100); border-bottom-color: var(--orange-500); }
+.lp .code-panel-meta { font-size: 11px; color: var(--ink-400); letter-spacing: 0.05em; }
+.lp .code-panel-body { padding: 18px 20px; }
+.lp .code-line { display: flex; gap: 18px; }
+.lp .code-line .ln { color: var(--ink-500); user-select: none; width: 22px; text-align: right; flex-shrink: 0; }
+.lp .code-line .src { color: var(--ink-200); white-space: pre; }
+.lp .tok-key { color: var(--orange-400); }
+.lp .tok-str { color: #9dcfe5; }
+.lp .tok-num { color: #c9b86e; }
+.lp .tok-com { color: var(--ink-500); font-style: italic; }
+.lp .tok-fn { color: #b79ce8; }
+.lp .code-response {
+  margin-top: 16px;
+  padding: 12px 16px;
+  background: var(--navy-900);
+  border: 1px solid var(--navy-line);
+  border-radius: 4px;
+  font-size: 11px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 14px;
+  align-items: center;
+  color: var(--ink-300);
+}
+.lp .code-response .method { color: var(--success); font-weight: 600; letter-spacing: 0.04em; }
+.lp .code-response .path { color: var(--ink-200); }
+.lp .code-response .latency { color: var(--ink-400); }
+
+/* Two-panel layout */
+.lp-split {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  z-index: 2;
+}
+.lp-pane-left {
+  background: var(--navy-900);
+  padding: 56px 72px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.lp-pane-right {
+  background: var(--navy-800);
+  border-left: 1px solid var(--navy-line);
+  padding: 56px 72px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Collapse to single column (form only) on narrow screens */
+@media (max-width: 880px) {
+  .lp-split { grid-template-columns: 1fr; }
+  .lp-pane-right { display: none; }
+  .lp-pane-left { padding: 40px 28px; }
+}
