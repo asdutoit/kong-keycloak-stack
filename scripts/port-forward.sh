@@ -1,22 +1,34 @@
 #!/bin/bash
 
+# Always target the local docker-desktop cluster, regardless of the
+# currently-selected kubectl context (so a prod context won't be hit).
+CONTEXT="docker-desktop"
+
+if ! kubectl config get-contexts -o name | grep -qx "$CONTEXT"; then
+  echo "Error: kubectl context '$CONTEXT' not found." >&2
+  echo "Available contexts:" >&2
+  kubectl config get-contexts -o name >&2
+  exit 1
+fi
+
 echo "Starting port-forwards for Kong + Keycloak + Jenkins + Monitoring stack..."
+echo "Using context: $CONTEXT"
 echo ""
 
 # Kill any existing port-forwards on these ports
 pkill -f "port-forward.*kong-system" 2>/dev/null || true
 
 # Start port-forwards in background
-kubectl port-forward -n kong-system --address 0.0.0.0 svc/keycloak 8080:8080 &
-kubectl port-forward -n kong-system svc/kong-proxy 8000:8000 &
-kubectl port-forward -n kong-system svc/kong-admin 8001:8001 &
-kubectl port-forward -n kong-system svc/kong-manager 8002:8002 &
-kubectl port-forward -n kong-system svc/jenkins 8081:8081 &
-# kubectl port-forward -n kong-system svc/postgres 5433:5432 &
-kubectl port-forward -n kong-system svc/httpbin 8082:80 &
-kubectl port-forward -n kong-system svc/prometheus 9090:9090 &
-kubectl port-forward -n kong-system svc/loki 3100:3100 &
-kubectl port-forward -n kong-system svc/grafana 3002:3001 &
+kubectl --context "$CONTEXT" port-forward -n kong-system --address 0.0.0.0 svc/keycloak 8080:8080 &
+kubectl --context "$CONTEXT" port-forward -n kong-system svc/kong-proxy 8000:8000 &
+kubectl --context "$CONTEXT" port-forward -n kong-system svc/kong-admin 8001:8001 &
+kubectl --context "$CONTEXT" port-forward -n kong-system svc/kong-manager 8002:8002 &
+kubectl --context "$CONTEXT" port-forward -n kong-system svc/jenkins 8081:8081 &
+# kubectl --context "$CONTEXT" port-forward -n kong-system svc/postgres 5433:5432 &
+kubectl --context "$CONTEXT" port-forward -n kong-system svc/httpbin 8082:80 &
+kubectl --context "$CONTEXT" port-forward -n kong-system svc/prometheus 9090:9090 &
+kubectl --context "$CONTEXT" port-forward -n kong-system svc/loki 3100:3100 &
+kubectl --context "$CONTEXT" port-forward -n kong-system svc/grafana 3002:3001 &
 
 sleep 2
 
