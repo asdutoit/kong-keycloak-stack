@@ -65,7 +65,10 @@ export default function Login(props: PageProps<Extract<KcContext, { pageId: "log
                                 />
                             )}
 
-                            {/* Social / IdP providers — only render if the realm has any */}
+                            {/* Social / IdP providers — only render if the realm has any.
+                                NOTE: intentionally NOT gated by usernameHidden, so a user
+                                stuck in password-only / re-auth mode can still retry the
+                                AD/ADFS broker instead of being trapped on the password form. */}
                             {realm.password && social?.providers !== undefined && social.providers.length !== 0 && (
                                 <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 22 }}>
                                     {social.providers.map(p => (
@@ -108,6 +111,29 @@ export default function Login(props: PageProps<Extract<KcContext, { pageId: "log
                                                     aria-invalid={hasError}
                                                 />
                                             </div>
+                                        </div>
+                                    )}
+
+                                    {/* Password-only / re-auth escape: when Keycloak re-renders
+                                        login.ftl with usernameHidden=true (e.g. after a failed
+                                        AD/ADFS broker login) the username field is gone. Without an
+                                        escape the user is stuck on a lone password field. Show the
+                                        attempted username (if any) read-only and a link back to the
+                                        full login page so they can use a different account. */}
+                                    {usernameHidden && (
+                                        <div className="lp-field">
+                                            {auth?.attemptedUsername !== undefined && (
+                                                <div style={{ fontSize: 13, color: "var(--ink-300)", marginBottom: 8 }}>
+                                                    {auth.attemptedUsername}
+                                                </div>
+                                            )}
+                                            <a
+                                                href={url.loginRestartFlowUrl ?? url.loginUrl}
+                                                title={msgStr("restartLoginTooltip")}
+                                                style={{ color: "var(--orange-500)", fontSize: 13, textDecoration: "none", fontWeight: 500 }}
+                                            >
+                                                Use a different account
+                                            </a>
                                         </div>
                                     )}
 
