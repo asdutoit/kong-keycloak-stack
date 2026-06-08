@@ -1,0 +1,63 @@
+# Mailpit — a local SMTP catcher for the dev stack. Keycloak (and anything
+# else) points its SMTP at mailpit:1025; every message is captured and viewable
+# in the web UI on :8025 (nothing actually leaves the cluster). Dev-only — in
+# real environments Keycloak SMTP targets a real relay / M365.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailpit
+  namespace: kong-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mailpit
+  template:
+    metadata:
+      labels:
+        app: mailpit
+    spec:
+      containers:
+      - name: mailpit
+        image: axllent/mailpit:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 1025
+          name: smtp
+        - containerPort: 8025
+          name: http
+        env:
+        - name: MP_SMTP_AUTH_ACCEPT_ANY
+          value: "true"
+        - name: MP_SMTP_AUTH_ALLOW_INSECURE
+          value: "true"
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8025
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: "25m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailpit
+  namespace: kong-system
+spec:
+  selector:
+    app: mailpit
+  ports:
+  - port: 1025
+    targetPort: 1025
+    name: smtp
+  - port: 8025
+    targetPort: 8025
+    name: http
+  type: ClusterIP

@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - postgres.yaml
+  - mailpit.yaml
   - keycloak.yaml
   - kong.yaml
   - kong-bootstrap.yaml
