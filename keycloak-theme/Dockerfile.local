@@ -5,3 +5,7 @@
 # tmac later.
 FROM quay.io/keycloak/keycloak:26.5
 COPY dist_keycloak/theme/api-portal /opt/keycloak/themes/api-portal
+# The login theme comes from the Keycloakify JAR; the email theme is a raw
+# hand-written FreeMarker dir (emails can't run React), baked in alongside it.
+# --chmod keeps it world-readable (Keycloak runs as uid 1000).
+COPY --chmod=0755 email /opt/keycloak/themes/api-portal/email
