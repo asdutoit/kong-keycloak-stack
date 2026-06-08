@@ -20,7 +20,7 @@ spec:
         # (Docker Desktop K8s shares the local image store — no push/load).
         # IfNotPresent so the cluster uses the locally-built image; falls back
         # to pulling the stock base layers only.
-        image: keycloak-api-portal:reg
+        image: keycloak-api-portal:reg3
         imagePullPolicy: IfNotPresent
         args: ["start-dev"]
         env:
