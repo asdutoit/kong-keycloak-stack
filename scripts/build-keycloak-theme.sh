@@ -23,6 +23,11 @@ echo "=== Extracting theme dir from the built JAR ==="
 # dist_keycloak/theme/api-portal, so recreate it from the JAR every build.
 rm -rf dist_keycloak/theme
 ( cd dist_keycloak && unzip -qo keycloak-theme-for-kc-all-other-versions.jar 'theme/*' )
+# unzip preserves the JAR's stored perms, which under a strict umask can be
+# 0600 (owner-only). The Dockerfile COPYs these as root, but Keycloak runs as
+# uid 1000 — owner-only files then 500 with "Permission denied" and the login
+# page renders blank/unstyled. Force world-readable (dirs 755 / files 644).
+chmod -R a+rX dist_keycloak/theme
 
 echo "=== Building image $IMAGE (theme baked as a raw themes/ dir) ==="
 docker build -f Dockerfile.local -t "$IMAGE" .
