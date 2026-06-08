@@ -29,19 +29,7 @@ export default function Login(props: PageProps<Extract<KcContext, { pageId: "log
                     {/* ---------------------------------------------- LEFT */}
                     <div className="lp-pane-left">
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                            <a
-                                href={url.loginUrl}
-                                style={{
-                                    fontFamily: "var(--font-portal-mono)",
-                                    fontSize: 11,
-                                    letterSpacing: "0.06em",
-                                    textTransform: "uppercase",
-                                    color: "var(--ink-400)",
-                                    textDecoration: "none"
-                                }}
-                            >
-                                {realm.displayNameHtml ? realm.displayName : "API Onboarding Portal"}
-                            </a>
+                            <BackButton />
                             <PortalMark />
                         </div>
 
@@ -267,6 +255,32 @@ function PortalMark() {
             <span style={{ color: "var(--orange-500)", marginRight: 6 }}>◆</span>
             API Onboarding
         </span>
+    );
+}
+
+// Top-left "← Back" — returns to the page that launched the login (the nav's
+// Log in calls signIn() directly, so browser history is [app page] → [login],
+// and history.back() lands back on the app). Replaces the old realm-name link
+// (which read "Keycloak" on the master realm).
+function BackButton() {
+    return (
+        <button
+            type="button"
+            onClick={() => window.history.back()}
+            style={{
+                fontFamily: "var(--font-portal-mono)",
+                fontSize: 11,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                color: "var(--ink-400)",
+                background: "transparent",
+                border: "none",
+                padding: 0,
+                cursor: "pointer"
+            }}
+        >
+            ← Back
+        </button>
     );
 }
 

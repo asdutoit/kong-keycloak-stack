@@ -23,19 +23,7 @@ export default function LoginResetPassword(props: PageProps<Extract<KcContext, {
                     {/* ---------------------------------------------- LEFT */}
                     <div className="lp-pane-left">
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                            <a
-                                href={url.loginUrl}
-                                style={{
-                                    fontFamily: "var(--font-portal-mono)",
-                                    fontSize: 11,
-                                    letterSpacing: "0.06em",
-                                    textTransform: "uppercase",
-                                    color: "var(--ink-400)",
-                                    textDecoration: "none"
-                                }}
-                            >
-                                {realm.displayNameHtml ? realm.displayName : "API Onboarding Portal"}
-                            </a>
+                            <BackButton />
                             <PortalMark />
                         </div>
 
@@ -141,5 +129,28 @@ function PortalMark() {
             <span style={{ color: "var(--orange-500)", marginRight: 6 }}>◆</span>
             API Onboarding
         </span>
+    );
+}
+
+// Top-left "← Back" — returns to the login page the user came from.
+function BackButton() {
+    return (
+        <button
+            type="button"
+            onClick={() => window.history.back()}
+            style={{
+                fontFamily: "var(--font-portal-mono)",
+                fontSize: 11,
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+                color: "var(--ink-400)",
+                background: "transparent",
+                border: "none",
+                padding: 0,
+                cursor: "pointer"
+            }}
+        >
+            ← Back
+        </button>
     );
 }
