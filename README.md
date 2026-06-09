@@ -93,7 +93,7 @@ Grafana comes pre-configured with a Prometheus datasource and a Kong Gateway Ove
 
 - **UI**: http://localhost:3001
 - **Credentials**: admin/admin
-- **Pre-loaded dashboard**: Kong Gateway Overview (8 panels)
+- **Pre-loaded dashboard**: Kong Gateway Overview (9 panels)
 - **Storage**: 1Gi PVC
 
 The Kong Gateway Overview dashboard includes:
@@ -105,6 +105,88 @@ The Kong Gateway Overview dashboard includes:
 - Rate limiting (429s)
 - Bandwidth
 - Active connections
+- Request logs (Loki)
+
+### Logs (Loki)
+
+Container logs are collected cluster-wide by a Promtail DaemonSet and pushed to
+Loki, which is wired into Grafana as a datasource. Browse them in Grafana →
+**Explore** → Loki, or via the **Request logs** panels on the dashboards.
+
+Kong also runs a global structured-logging plugin that emits one JSON object per
+request — including request/response **headers**, `service`, `route`,
+`consumer`, `client_ip` and `latencies`. Bodies are **not** captured by default
+(see below).
+
+Useful LogQL queries:
+
+```logql
+# All Kong logs
+{namespace="kong-system", container="kong"}
+
+# Structured request logs, parsed
+{namespace="kong-system", container="kong"} | json | source="kong"
+
+# Errors for a specific onboarded API (matches the per-service dashboard panel)
+{namespace="kong-system", container="kong"} | json | service_name="my-api" | response_status >= 500
+
+# Filter by a request header
+{namespace="kong-system", container="kong"} | json | request_headers_host="api.example.com"
+```
+
+#### Log transport
+
+The global log plugin is provisioned by the `kong-bootstrap-plugins` Job and is
+configurable via the `LOG_PLUGIN` env var on that Job:
+
+| `LOG_PLUGIN`      | Behaviour                                                        | Required env                  |
+| ----------------- | --------------------------------------------------------------- | ----------------------------- |
+| `file-log`        | JSON to `/dev/stdout` → tailed by Promtail into Loki (default)   | —                             |
+| `http-log`        | POST JSON to an external collector (prod-style)                  | `LOG_HTTP_ENDPOINT`           |
+| `tcp-log`         | Stream JSON to a TCP sink (e.g. Logstash)                        | `LOG_TCP_HOST`, `LOG_TCP_PORT` |
+| `off`             | No log plugin                                                   | —                             |
+
+Switching transports leaves the previous global plugin in place; remove it via
+the Admin API (`DELETE /plugins/{id}`) before re-running the Job.
+
+#### Capturing request/response bodies (per API)
+
+Bodies are opt-in per API because of size/PII/performance concerns. Add an
+`x-kong-plugin-post-function` to the API's OpenAPI spec — the provisioner
+attaches it per route, and the captured values appear in the structured log
+object (`request.body` / `response.body`). Validated recipe:
+
+```yaml
+x-kong-plugin-post-function:
+  config:
+    access:
+      # Buffer the upstream response so its body is readable later, and
+      # capture the request body (available in the access phase).
+      - "kong.service.request.enable_buffering()"
+      - "kong.log.set_serialize_value('request.body', kong.request.get_raw_body())"
+    header_filter:
+      # Read the buffered upstream response body.
+      - "kong.log.set_serialize_value('response.body', kong.service.response.get_raw_body())"
+```
+
+> Note: `enable_buffering()` disables response streaming for that route. Only
+> capture bodies where you need them, and beware of logging sensitive data.
+
+#### Production parity
+
+This local stack runs Kong OSS (`kong/kong:3.9.1`); production runs Kong Gateway
+Enterprise (`3.14.0.3`). The logging setup above is portable — it uses only
+bundled plugins (`file-log`/`http-log`/`tcp-log`, `post-function`) and stable
+PDK calls present in both editions. Differences to account for in prod:
+
+- **Delivery**: plugins are managed via decK (see `jenkins/Jenkinsfile.deck`),
+  not an Admin API bootstrap Job — declare the global log plugin and per-API
+  `post-function` in decK config / the OpenAPI specs.
+- **Transport**: prefer `http-log`/`tcp-log` to a real collector over
+  `file-log` → stdout (set `LOG_PLUGIN` accordingly).
+- **Admin API**: Enterprise enforces RBAC and workspaces — Admin API calls need
+  a `Kong-Admin-Token` and the target workspace; provision the plugin in the
+  correct workspace.
 
 ## PostgreSQL Database
 
