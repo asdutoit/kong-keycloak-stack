@@ -47,22 +47,25 @@ data:
       - job_name: kubernetes-pods
         kubernetes_sd_configs:
           - role: pod
+        pipeline_stages:
+          # Parse the containerd/CRI log envelope ("<time> <stream> <flags> <msg>")
+          # so the stored line is just the message — required for `| json`
+          # parsing of Kong's file-log output and proper log timestamps.
+          - cri: {}
         relabel_configs:
-          - source_labels: [__meta_kubernetes_pod_node_name]
-            target_label: __host__
           - action: labelmap
             regex: __meta_kubernetes_pod_label_(.+)
           - source_labels: [__meta_kubernetes_namespace]
             target_label: namespace
           - source_labels: [__meta_kubernetes_pod_name]
             target_label: pod
-          - source_labels: [__meta_kubernetes_container_name]
+          - source_labels: [__meta_kubernetes_pod_container_name]
             target_label: container
           - replacement: /var/log/pods/*$1/*.log
             separator: /
             source_labels:
               - __meta_kubernetes_pod_uid
-              - __meta_kubernetes_container_name
+              - __meta_kubernetes_pod_container_name
             target_label: __path__
 ---
 apiVersion: apps/v1
@@ -85,6 +88,11 @@ spec:
       containers:
       - name: promtail
         image: grafana/promtail:3.4.2
+        env:
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         args:
         - -config.file=/etc/promtail/promtail.yaml
         securityContext:

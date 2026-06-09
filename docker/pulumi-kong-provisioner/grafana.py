@@ -181,6 +181,28 @@ def _build_dashboard(service_name: str, platform: str, environment: str) -> dict
                     }
                 ],
             },
+            {
+                # Structured request/response logs from Kong's file-log plugin,
+                # collected by Promtail into Loki. Includes request/response
+                # headers; filterable here to this service via service_name.
+                "title": "Request Logs",
+                "type": "logs",
+                "gridPos": {"h": 10, "w": 24, "x": 0, "y": 24},
+                "datasource": {"type": "loki", "uid": "loki"},
+                "targets": [
+                    {
+                        "expr": f'{{namespace="kong-system", container="kong"}} | json | service_name=`{service_name}`',
+                        "queryType": "range",
+                    }
+                ],
+                "options": {
+                    "showTime": True,
+                    "wrapLogMessage": True,
+                    "enableLogDetails": True,
+                    "dedupStrategy": "none",
+                    "sortOrder": "Descending",
+                },
+            },
         ],
     }
 
