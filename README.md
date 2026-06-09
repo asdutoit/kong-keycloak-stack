@@ -113,10 +113,22 @@ Container logs are collected cluster-wide by a Promtail DaemonSet and pushed to
 Loki, which is wired into Grafana as a datasource. Browse them in Grafana →
 **Explore** → Loki, or via the **Request logs** panels on the dashboards.
 
-Kong also runs a global structured-logging plugin that emits one JSON object per
+Kong also runs a structured-logging plugin that emits one JSON object per
 request — including request/response **headers**, `service`, `route`,
 `consumer`, `client_ip` and `latencies`. Bodies are **not** captured by default
 (see below).
+
+Logging is enabled two ways, so every API is always covered:
+
+- **Globally** by the `kong-bootstrap-plugins` Job (catches all traffic,
+  including unmatched routes and the Admin API).
+- **Per API** by the Pulumi/Jenkins onboarding pipeline
+  (`jenkins/Jenkinsfile.pulumi`), which auto-injects an `x-kong-plugin-file-log`
+  into every spec — exactly like it does for `x-kong-plugin-prometheus` — so
+  logging is baked into each API's provisioned (Pulumi-managed) config and does
+  not depend on the global Job existing in that environment. Set
+  `LOG_HTTP_ENDPOINT` on the pipeline to inject `http-log` to a collector
+  instead, and a spec that already declares any `*-log` plugin is left untouched.
 
 Useful LogQL queries:
 
