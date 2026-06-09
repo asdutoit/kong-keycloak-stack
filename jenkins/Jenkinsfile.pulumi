@@ -149,6 +149,20 @@ pipeline {
                             specContent += '\nx-kong-plugin-prometheus:\n  enabled: true\n  config: {}\n'
                         }
 
+                        // Ensure structured logging is always enabled (same
+                        // guarantee as Prometheus above). Default: file-log ->
+                        // stdout, tailed by Promtail into Loki. If the pipeline
+                        // sets LOG_HTTP_ENDPOINT, ship via http-log to that
+                        // collector instead (prod parity). A spec that already
+                        // declares any *-log plugin is left untouched (override).
+                        if (!(specContent =~ /x-kong-plugin-(file|http|tcp)-log/)) {
+                            if (env.LOG_HTTP_ENDPOINT?.trim()) {
+                                specContent += "\nx-kong-plugin-http-log:\n  config:\n    http_endpoint: ${env.LOG_HTTP_ENDPOINT}\n    method: POST\n    content_type: application/json\n"
+                            } else {
+                                specContent += '\nx-kong-plugin-file-log:\n  config:\n    path: /dev/stdout\n    reopen: false\n'
+                            }
+                        }
+
                         for (targetEnv in targetEnvs) {
                             targetEnv = targetEnv.trim()
                             def stackName = "${platform}-${targetEnv}-${svc}"
