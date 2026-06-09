@@ -12,6 +12,20 @@ spec:
       containers:
         - name: bootstrap
           image: curlimages/curl:8.10.1
+          env:
+            # Logging transport for the global Kong log plugin.
+            #   file-log -> /dev/stdout  (default; tailed by Promtail into Loki)
+            #   http-log -> LOG_HTTP_ENDPOINT (prod-style: ship to a collector)
+            #   tcp-log  -> LOG_TCP_HOST:LOG_TCP_PORT
+            #   off      -> do not enable any log plugin
+            - name: LOG_PLUGIN
+              value: "file-log"
+            - name: LOG_HTTP_ENDPOINT
+              value: ""
+            - name: LOG_TCP_HOST
+              value: ""
+            - name: LOG_TCP_PORT
+              value: ""
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -52,18 +66,50 @@ spec:
                 }
               }'
 
-              # Structured request/response logging as JSON to the container's
-              # stdout. Promtail tails stdout, so these lines flow into Loki and
-              # can be queried in Grafana, filterable per service/route/consumer.
-              # The default log object includes request & response headers; it
-              # does NOT include request/response bodies (capture those per-API
-              # with an x-kong-plugin-post-function in the OpenAPI spec).
-              enable_plugin file-log '{
-                "name": "file-log",
-                "config": {
-                  "path": "/dev/stdout",
-                  "reopen": false
-                }
-              }'
+              # Structured request/response logging. The log object includes
+              # request & response headers, service, route, consumer and
+              # latencies. It does NOT include request/response bodies — capture
+              # those per-API with an x-kong-plugin-post-function in the spec.
+              # The transport is selected via the LOG_PLUGIN env var.
+              echo "Configuring log transport: $LOG_PLUGIN"
+              case "$LOG_PLUGIN" in
+                off)
+                  echo "  Logging plugin disabled (LOG_PLUGIN=off)."
+                  ;;
+                file-log)
+                  enable_plugin file-log '{
+                    "name": "file-log",
+                    "config": { "path": "/dev/stdout", "reopen": false }
+                  }'
+                  ;;
+                http-log)
+                  if [ -z "$LOG_HTTP_ENDPOINT" ]; then
+                    echo "ERROR: LOG_PLUGIN=http-log requires LOG_HTTP_ENDPOINT" >&2
+                    exit 1
+                  fi
+                  enable_plugin http-log "{
+                    \"name\": \"http-log\",
+                    \"config\": {
+                      \"http_endpoint\": \"$LOG_HTTP_ENDPOINT\",
+                      \"method\": \"POST\",
+                      \"content_type\": \"application/json\"
+                    }
+                  }"
+                  ;;
+                tcp-log)
+                  if [ -z "$LOG_TCP_HOST" ] || [ -z "$LOG_TCP_PORT" ]; then
+                    echo "ERROR: LOG_PLUGIN=tcp-log requires LOG_TCP_HOST and LOG_TCP_PORT" >&2
+                    exit 1
+                  fi
+                  enable_plugin tcp-log "{
+                    \"name\": \"tcp-log\",
+                    \"config\": { \"host\": \"$LOG_TCP_HOST\", \"port\": $LOG_TCP_PORT }
+                  }"
+                  ;;
+                *)
+                  echo "ERROR: unknown LOG_PLUGIN '$LOG_PLUGIN'" >&2
+                  exit 1
+                  ;;
+              esac
 
               echo "Done."
