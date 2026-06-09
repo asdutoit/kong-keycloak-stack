@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: kong-bootstrap-prometheus
+  name: kong-bootstrap-plugins
   namespace: kong-system
 spec:
   backoffLimit: 10
@@ -23,23 +23,47 @@ spec:
                 sleep 2
               done
 
-              echo "Checking for existing global prometheus plugin..."
-              if curl -fsS "$ADMIN/plugins" | grep -q '"name":"prometheus"'; then
-                echo "Prometheus plugin already exists — nothing to do."
-                exit 0
-              fi
+              # enable_plugin <name> <json-config>: create a global plugin only
+              # if one of that name does not already exist (idempotent).
+              enable_plugin() {
+                name="$1"
+                config="$2"
+                echo "Checking for existing global $name plugin..."
+                if curl -fsS "$ADMIN/plugins" | grep -q "\"name\":\"$name\""; then
+                  echo "  $name plugin already exists — skipping."
+                  return 0
+                fi
+                echo "  Enabling $name plugin globally..."
+                curl -fsS -X POST "$ADMIN/plugins" \
+                  -H "Content-Type: application/json" \
+                  -d "$config"
+                echo
+              }
 
-              echo "Enabling prometheus plugin globally..."
-              curl -fsS -X POST "$ADMIN/plugins" \
-                -H "Content-Type: application/json" \
-                -d '{
-                  "name": "prometheus",
-                  "config": {
-                    "per_consumer": true,
-                    "status_code_metrics": true,
-                    "latency_metrics": true,
-                    "bandwidth_metrics": true,
-                    "upstream_health_metrics": true
-                  }
-                }'
-              echo "\nDone."
+              # Metrics for Prometheus / Grafana dashboards.
+              enable_plugin prometheus '{
+                "name": "prometheus",
+                "config": {
+                  "per_consumer": true,
+                  "status_code_metrics": true,
+                  "latency_metrics": true,
+                  "bandwidth_metrics": true,
+                  "upstream_health_metrics": true
+                }
+              }'
+
+              # Structured request/response logging as JSON to the container's
+              # stdout. Promtail tails stdout, so these lines flow into Loki and
+              # can be queried in Grafana, filterable per service/route/consumer.
+              # The default log object includes request & response headers; it
+              # does NOT include request/response bodies (capture those per-API
+              # with an x-kong-plugin-post-function in the OpenAPI spec).
+              enable_plugin file-log '{
+                "name": "file-log",
+                "config": {
+                  "path": "/dev/stdout",
+                  "reopen": false
+                }
+              }'
+
+              echo "Done."

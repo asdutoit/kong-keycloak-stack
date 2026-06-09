@@ -215,6 +215,26 @@ data:
               "legendFormat": "waiting"
             }
           ]
+        },
+        {
+          "id": 9,
+          "title": "Request Logs (Loki)",
+          "type": "logs",
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 32 },
+          "datasource": { "type": "loki", "uid": "loki" },
+          "targets": [
+            {
+              "expr": "{namespace=\"kong-system\", container=\"kong\"} | json",
+              "queryType": "range"
+            }
+          ],
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          }
         }
       ]
     }
