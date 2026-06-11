@@ -3,7 +3,7 @@
 # so nothing else in Keycloak changes — not even the KC admin login.
 #
 # Idempotent. Requires the keycloak port-forward on :8080 and admin creds.
-# Usage: ./scripts/set-login-theme.sh [theme-name]   (default: api-portal)
+# Usage: ./scripts/utils/set-login-theme.sh [theme-name]   (default: api-portal)
 set -euo pipefail
 
 KC="${KC_URL:-http://localhost:8080}"

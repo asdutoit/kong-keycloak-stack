@@ -1,0 +1,4 @@
+# Local/dev Argo Rollouts values.
+# Enable the dashboard (the kubectl-argo-rollouts UI backend).
+dashboard:
+  enabled: true

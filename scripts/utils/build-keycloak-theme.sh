@@ -6,11 +6,11 @@
 # keycloak Deployment (k8s/base/keycloak.yaml) references keycloak-api-portal:reg
 # with imagePullPolicy: IfNotPresent, so a rollout restart picks it up.
 #
-# Usage: ./scripts/build-keycloak-theme.sh [image-tag]   (default: keycloak-api-portal:reg)
+# Usage: ./scripts/utils/build-keycloak-theme.sh [image-tag]   (default: keycloak-api-portal:reg)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-THEME_DIR="$(cd "$SCRIPT_DIR/../keycloak-theme" && pwd)"
+THEME_DIR="$(cd "$SCRIPT_DIR/../../keycloak-theme" && pwd)"
 IMAGE="${1:-keycloak-api-portal:reg}"
 
 echo "=== Building Keycloakify theme (requires Node + Maven) ==="
@@ -37,7 +37,7 @@ echo ""
 echo "NOTE: Docker Desktop K8s caches images by TAG — a rollout restart will NOT"
 echo "pick up a rebuilt same-tag image (imagePullPolicy IfNotPresent reuses the"
 echo "cached one). On a meaningful theme change, BUMP THE TAG, e.g.:"
-echo "  ./scripts/build-keycloak-theme.sh keycloak-api-portal:reg2"
+echo "  ./scripts/utils/build-keycloak-theme.sh keycloak-api-portal:reg2"
 echo "  kubectl -n kong-system set image deploy/keycloak keycloak=keycloak-api-portal:reg2"
 echo "  (and update k8s/base/keycloak.yaml to match)"
-echo "Scope theme to client:  ./scripts/set-login-theme.sh"
+echo "Scope theme to client:  ./scripts/utils/set-login-theme.sh"

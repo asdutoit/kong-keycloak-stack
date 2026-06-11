@@ -1,0 +1,12 @@
+# Local/dev Argo CD values.
+# HTTP (insecure) so `kubectl port-forward` + a browser work without TLS.
+# Dex/SSO is disabled — not needed on a local workstation.
+global:
+  domain: argocd.localhost
+
+configs:
+  params:
+    server.insecure: true
+
+dex:
+  enabled: false

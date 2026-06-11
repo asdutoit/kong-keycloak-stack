@@ -24,16 +24,34 @@ kong-keycloak-stack/
 │   └── overlays/
 │       └── local/
 │           └── kustomization.yaml  # Local dev overlay
-├── scripts/
-│   ├── deploy.sh           # Deploy all services
-│   ├── teardown.sh         # Remove all services
-│   ├── port-forward.sh     # Start port-forwards
-│   ├── configure-auth.sh   # Configure Kong routes, auth & Prometheus plugin
-│   └── manage-keys.sh      # API key management
+├── argo/
+│   └── values/             # Helm values for the Argo stack
+│       ├── argo-cd.yaml
+│       ├── argo-workflows.yaml
+│       └── argo-rollouts.yaml
+├── scripts/                # See scripts/README.md
+│   ├── deploy.sh           # Deploy the whole stack — main entrypoint
+│   ├── port-forward.sh     # Start port-forwards — main entrypoint
+│   ├── teardown.sh         # Remove the stack — main entrypoint
+│   ├── lib/                # Helpers invoked by deploy.sh (don't run directly)
+│   │   ├── install-argo.sh
+│   │   ├── create-keycloak-realm.sh
+│   │   └── create-jenkins-jobs.py
+│   └── utils/              # Standalone utilities (run occasionally)
+│       ├── configure-auth.sh
+│       ├── manage-keys.sh
+│       ├── bootstrap-local.sh
+│       ├── build-keycloak-theme.sh
+│       └── set-login-theme.sh
 └── README.md
 ```
 
 ## Quick Start
+
+**Prerequisites:** a local Kubernetes cluster (Docker Desktop), `kubectl`, and
+`helm`. `deploy.sh` brings up the full stack — Kong, Keycloak, Jenkins,
+monitoring (Prometheus/Loki/Grafana), **and the Argo stack (Argo CD, Argo
+Workflows, Argo Rollouts)** — so a new teammate can clone and run one command.
 
 ```bash
 # Deploy the stack
@@ -43,7 +61,7 @@ kong-keycloak-stack/
 ./scripts/port-forward.sh
 
 # Configure Kong with httpbin service, API key auth, and Prometheus plugin
-./scripts/configure-auth.sh
+./scripts/utils/configure-auth.sh
 
 # Test the API
 curl -H 'apikey: my-api-key-123' http://localhost:8000/api/httpbin/get
@@ -62,12 +80,42 @@ curl -H 'apikey: my-api-key-123' http://localhost:8000/api/httpbin/get
 | httpbin | http://localhost:8082 | - |
 | Prometheus | http://localhost:9090 | - |
 | Grafana | http://localhost:3001 | admin/admin |
+| Argo CD | http://localhost:8083 | admin / (see below) |
+| Argo Workflows | http://localhost:2746 | - |
+
+## Argo (GitOps, Workflows, Rollouts)
+
+The Argo stack is installed via Helm (`argo-helm` charts) by
+`scripts/lib/install-argo.sh`, which `deploy.sh` runs automatically. It is
+idempotent (`helm upgrade --install`), so re-running `deploy.sh` is safe.
+
+| Component | Namespace | Chart |
+|-----------|-----------|-------|
+| Argo CD | `argocd` | `argo/argo-cd` |
+| Argo Workflows | `argo` | `argo/argo-workflows` |
+| Argo Rollouts | `argo-rollouts` | `argo/argo-rollouts` |
+
+- **Pinned versions** live at the top of `scripts/lib/install-argo.sh`; bump them
+  deliberately to track production. Per-app config is in `argo/values/`.
+- **Argo CD admin password**:
+  ```bash
+  kubectl -n argocd get secret argocd-initial-admin-secret \
+    -o jsonpath='{.data.password}' | base64 -d
+  ```
+- **Argo CD runs insecure (HTTP)** for convenient local port-forwarding —
+  fine for a workstation, not for shared environments.
+- **Argo Rollouts dashboard**: `kubectl argo rollouts dashboard`.
+
+> **Existing clusters**: if a cluster already has Argo installed via raw
+> manifests (`kubectl apply -f install.yaml`), Helm will refuse to adopt those
+> resources. Remove them first — `kubectl delete ns argocd argo argo-rollouts`
+> — then run `deploy.sh`. Fresh workstations need no such step.
 
 ## Monitoring
 
 ### Prometheus
 
-Prometheus scrapes Kong metrics every 15s. After running `configure-auth.sh`, the global Prometheus plugin is enabled on Kong.
+Prometheus scrapes Kong metrics every 15s. After running `scripts/utils/configure-auth.sh`, the global Prometheus plugin is enabled on Kong.
 
 - **UI**: http://localhost:9090
 - **Kong metrics endpoint**: http://localhost:8001/metrics
@@ -263,16 +311,16 @@ curl -X POST -u admin:YOUR_TOKEN http://localhost:8081/job/JOB_NAME/build
 
 ```bash
 # Create a consumer
-./scripts/manage-keys.sh create-consumer myuser
+./scripts/utils/manage-keys.sh create-consumer myuser
 
 # Create an API key (auto-generated)
-./scripts/manage-keys.sh create-key myuser
+./scripts/utils/manage-keys.sh create-key myuser
 
 # Create an API key (custom)
-./scripts/manage-keys.sh create-key myuser my-custom-key
+./scripts/utils/manage-keys.sh create-key myuser my-custom-key
 
 # List keys
-./scripts/manage-keys.sh list-keys myuser
+./scripts/utils/manage-keys.sh list-keys myuser
 ```
 
 ## Keycloak JWT Integration
@@ -283,7 +331,7 @@ For Kong OSS + Keycloak integration, use the JWT plugin:
 2. Get the realm's public key from the OIDC config endpoint
 3. Configure Kong JWT plugin with Keycloak's issuer
 
-See `./scripts/configure-auth.sh` for detailed instructions.
+See `./scripts/utils/configure-auth.sh` for detailed instructions.
 
 ## Cleanup
 

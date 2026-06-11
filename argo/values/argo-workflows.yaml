@@ -1,0 +1,6 @@
+# Local/dev Argo Workflows values.
+# The server UI runs in 'server' auth mode (no SSO/login prompt), which is
+# convenient on a local workstation. Tighten this for shared environments.
+server:
+  authModes:
+    - server
