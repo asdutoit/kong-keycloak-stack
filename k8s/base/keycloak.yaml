@@ -16,7 +16,7 @@ spec:
       containers:
       - name: keycloak
         # Stock keycloak:26.5 + the api-portal login theme baked in as a raw
-        # themes/ dir. Build locally with ./scripts/build-keycloak-theme.sh
+        # themes/ dir. Build locally with ./scripts/utils/build-keycloak-theme.sh
         # (Docker Desktop K8s shares the local image store — no push/load).
         # IfNotPresent so the cluster uses the locally-built image; falls back
         # to pulling the stock base layers only.

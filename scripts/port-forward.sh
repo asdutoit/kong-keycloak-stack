@@ -17,6 +17,8 @@ echo ""
 
 # Kill any existing port-forwards on these ports
 pkill -f "port-forward.*kong-system" 2>/dev/null || true
+pkill -f "port-forward.*svc/argocd-server" 2>/dev/null || true
+pkill -f "port-forward.*svc/argo-workflows-server" 2>/dev/null || true
 
 # Start port-forwards in background
 kubectl --context "$CONTEXT" port-forward -n kong-system --address 0.0.0.0 svc/keycloak 8080:8080 &
@@ -29,6 +31,9 @@ kubectl --context "$CONTEXT" port-forward -n kong-system svc/httpbin 8082:80 &
 kubectl --context "$CONTEXT" port-forward -n kong-system svc/prometheus 9090:9090 &
 kubectl --context "$CONTEXT" port-forward -n kong-system svc/loki 3100:3100 &
 kubectl --context "$CONTEXT" port-forward -n kong-system svc/grafana 3002:3001 &
+# Argo stack (separate namespaces). ArgoCD runs insecure (HTTP) for local use.
+kubectl --context "$CONTEXT" port-forward -n argocd svc/argocd-server 8083:80 &
+kubectl --context "$CONTEXT" port-forward -n argo svc/argo-workflows-server 2746:2746 &
 
 sleep 2
 
@@ -43,6 +48,8 @@ echo "  - httpbin:      http://localhost:8082"
 echo "  - Prometheus:   http://localhost:9090"
 echo "  - Loki:         http://localhost:3100"
 echo "  - Grafana:      http://localhost:3002 (admin/admin)"
+echo "  - Argo CD:      http://localhost:8083 (admin / argocd-initial-admin-secret)"
+echo "  - Argo Workflows: http://localhost:2746"
 echo ""
 echo "PostgreSQL Databases:"
 echo "  - Kong DB:      postgres://kong:kongpass@localhost:5433/kong"

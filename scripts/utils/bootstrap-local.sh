@@ -29,7 +29,7 @@ set -euo pipefail
 # ─── Defaults ──────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STACK_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+STACK_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PORTAL_DIR="${PORTAL_DIR:-$(cd "$STACK_DIR/../api-onboarding/backstage-ui" 2>/dev/null && pwd || echo "")}"
 KEYCLOAK_URL="${KEYCLOAK_URL:-http://localhost:8080}"
 KC_ADMIN_USER="${KC_ADMIN_USER:-admin}"
@@ -70,10 +70,10 @@ ok "tools ok"
 
 if [[ $SKIP_DEPLOY -eq 0 ]]; then
   step "Deploying k8s stack (Kong + Keycloak + Postgres + Jenkins)"
-  if [[ -x "$SCRIPT_DIR/deploy.sh" ]]; then
-    "$SCRIPT_DIR/deploy.sh"
+  if [[ -x "$SCRIPT_DIR/../deploy.sh" ]]; then
+    "$SCRIPT_DIR/../deploy.sh"
   else
-    fail "deploy.sh not found or not executable at $SCRIPT_DIR/deploy.sh"
+    fail "deploy.sh not found or not executable at $SCRIPT_DIR/../deploy.sh"
   fi
 else
   warn "--skip-deploy specified, assuming k8s stack already running"

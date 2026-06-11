@@ -5,6 +5,15 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OVERLAY_DIR="$SCRIPT_DIR/../k8s/overlays/local"
 
+
+# ─── Prerequisites ───────────────────────────────────────────────────────────
+for bin in kubectl helm; do
+  command -v "$bin" >/dev/null 2>&1 || {
+    echo "Error: '$bin' is required but not installed."
+    exit 1
+  }
+done
+
 # ─── Select Kubernetes Context ───────────────────────────────────────────────
 CONTEXTS=($(kubectl config get-contexts -o name))
 
@@ -50,6 +59,11 @@ kubectl wait --for=condition=available --timeout=300s deployment/jenkins -n kong
 kubectl wait --for=condition=available --timeout=120s deployment/prometheus -n kong-system
 kubectl wait --for=condition=available --timeout=120s deployment/loki -n kong-system
 kubectl wait --for=condition=available --timeout=120s deployment/grafana -n kong-system
+
+# ─── Install Argo stack (Argo CD, Workflows, Rollouts) via Helm ──────────────
+echo ""
+echo "Installing Argo stack (Argo CD, Argo Workflows, Argo Rollouts)..."
+"$SCRIPT_DIR/lib/install-argo.sh"
 
 # Enable Kong Prometheus plugin globally
 echo "Enabling Kong Prometheus plugin..."
@@ -125,7 +139,7 @@ KC_PF_PID=$!
 sleep 2
 
 echo "Provisioning Keycloak realm..."
-"$SCRIPT_DIR/create-keycloak-realm.sh" "http://localhost:8198" "admin:admin"
+"$SCRIPT_DIR/lib/create-keycloak-realm.sh" "http://localhost:8198" "admin:admin"
 
 kill $KC_PF_PID 2>/dev/null || true
 
@@ -155,7 +169,7 @@ for i in $(seq 1 30); do
 done
 
 # Generate job config XML files and create/update jobs via Jenkins API
-python3 "$SCRIPT_DIR/create-jenkins-jobs.py" "$JENKINS_DIR" "$JENKINS_URL" "$JENKINS_AUTH"
+python3 "$SCRIPT_DIR/lib/create-jenkins-jobs.py" "$JENKINS_DIR" "$JENKINS_URL" "$JENKINS_AUTH"
 
 kill $JENKINS_PF_PID 2>/dev/null || true
 
@@ -164,8 +178,10 @@ echo "=== Deployment Complete ==="
 echo ""
 echo "Next steps:"
 echo "  1. Run: ./scripts/port-forward.sh"
-echo "  2. Run: ./scripts/configure-auth.sh  (also enables Prometheus plugin on Kong)"
+echo "  2. Run: ./scripts/utils/configure-auth.sh  (also enables Prometheus plugin on Kong)"
 echo "  3. Test: curl -H 'apikey: my-api-key-123' http://localhost:8000/api/httpbin/get"
 echo "  4. Grafana: http://localhost:3001 (admin/admin)"
 echo "  5. Prometheus: http://localhost:9090"
 echo "  6. Loki:       http://localhost:3100 (via Grafana Explore)"
+echo "  7. Argo CD:    kubectl -n argocd port-forward svc/argocd-server 8083:443  (admin / see install-argo output)"
+echo "  8. Argo Workflows: kubectl -n argo port-forward svc/argo-workflows-server 2746:2746"
